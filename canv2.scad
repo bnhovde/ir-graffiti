@@ -25,9 +25,15 @@
    LED AIM
      The LEDs fire radially, out a nozzle boss on the side of the cap - the way
      a real spray can sprays. Hold the can upright with your finger on the
-     button and the nozzle at the wall; the IR lands on the wall and scatters
-     back to the camera at the rear of the room. led_mode = "front" puts them
-     out the top of the lid instead, "side" is v1's bare cross holes.
+     button and the nozzle toward the wall.
+
+     NOTE, 30 Aug 2026: the original plan was for the IR to bounce off the wall
+     and be seen by a camera at the back of the room. That was measured and is
+     dead - roughly 1000x too dim. The camera now sits AT the wall looking back
+     at the user, so the nozzle points straight at it and the camera sees the
+     LEDs directly. The radial nozzle is still correct for that; only the camera
+     moved. led_mode = "front" puts them out the top of the lid instead, "side"
+     is v1's bare cross holes.
 
    ASSEMBLY
      To open either end: flat screwdriver into the slot at the seam, twist. Up
