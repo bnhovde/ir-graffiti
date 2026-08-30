@@ -11,14 +11,25 @@ webcam offers no manual exposure control, which is the single most important
 setting for rejecting ambient light. Both are fixed by buying different parts,
 not by more software.
 
+## Try it
+
+**▶ [bnhovde.github.io/ir-graffiti/test-wall.html](https://bnhovde.github.io/ir-graffiti/test-wall.html)**
+
+Served from GitHub Pages off `main`, so it updates on every push. Camera panel →
+**IR can** → pick the camera → **Diagnostics** → **Calibrate 4 corners**.
+
+Mouse and touch work without any of the hardware, if you just want to see the
+wall itself.
+
+To run it locally instead:
+
 ```bash
 python3 -m http.server 8731
 open http://localhost:8731/test-wall.html
 ```
 
-Use `localhost`, not `file://` — `getUserMedia` needs a secure context. Then:
-camera panel → **IR can** → pick the camera → **Diagnostics** → **Calibrate 4
-corners**.
+Use `localhost`, not `file://` — `getUserMedia` only works in a secure context,
+which `localhost` and HTTPS satisfy and a local file does not.
 
 ---
 
@@ -235,7 +246,7 @@ Pi Hut, or BerryBase for the camera. AliExpress is fine for the filter.
 | [`canv2.scad`](canv2.scad) | Parametric model, all five parts |
 | [`stl/`](stl) | Exported STLs |
 | [`AAA_holder.3mf`](AAA_holder.3mf) | Third-party battery holder. Use the `AAA_holder_di_CM.stl` variant — the cradle is cut for its 36.2 mm width |
-| [`test-wall.html`](test-wall.html) | The wall app. Has an **IR can** camera mode: pure-JS blob tracking, rolling background, 4-corner homography calibration, and a diagnostics overlay showing the brightest pixel with no thresholding applied. `app.irTracker` is exposed on the console for tuning |
+| [`test-wall.html`](test-wall.html) | The wall app — [live](https://bnhovde.github.io/ir-graffiti/test-wall.html). Has an **IR can** camera mode: pure-JS blob tracking, rolling background, 4-corner homography calibration, and a diagnostics overlay showing the brightest pixel with no thresholding applied. `app.irTracker` is exposed on the console for tuning |
 | [`tools/irtest.py`](tools/irtest.py) | Standalone Python tuner for the same pipeline, with a live HUD. Needs `opencv-python` |
 | [`tools/ircam-setup.sh`](tools/ircam-setup.sh) | Attempts manual camera control via `uvcc`. **Known not to work on macOS** — kept because it works on Linux, and it now fails in 6 s rather than hanging |
 | [`canv1.scad`](canv1.scad) | Superseded first draft, kept for reference |
