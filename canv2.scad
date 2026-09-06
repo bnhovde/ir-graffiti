@@ -375,6 +375,17 @@ front_t = 2.0;
 lip     = 6.0;                 // how far the front lips wrap in. Must reach past
                                // hold_w/2 - 14.9 to catch the CM part's narrower
                                // battery face, not just the wings.
+
+// Retention catch. This sits on the FRONT lips, not the side rails, and the
+// reason is the CM holder's cable-management wings: eight discrete lugs that
+// stick out to |x| = 18.10 along the BACK half of the thickness. Anything
+// biting inward from the side rails has to be forced past all eight. The front
+// half of the holder never exceeds 14.90 wide and the wings never reach the
+// front, so a catch here leaves the whole wing corridor clear.
+catch_p = 0.8;                 // how far it stands into the pocket, in -Y
+catch_h = 1.6;                 // flat catching face
+catch_w = 3.6;                 // tangential width, measured in from the window
+catch_lead = 3.0;              // 45-ish deg lead-in above it
 crad_z0 = base_th;             // pocket floor
 crad_h  = hold_l + 6;
 
@@ -407,14 +418,17 @@ module cradle() {
                 cube([cw/2, back_t+1, hold_l-14]);
         }
 
-        // retention tabs at the top of each side rail: flat catch underneath,
-        // 45 deg lead-in above. Added after the pocket cut.
+        // retention catches on the front lips: flat face underneath, lead-in
+        // above. The holder's front face clicks past them; the wings pass
+        // behind, untouched.
         for (s=[-1,1])
             hull() {
-                translate([s*(cw/2) - (s > 0 ? 1.4 : 0), -ct/2, crad_z0+hold_l])
-                    cube([1.4, ct, 1.6]);
-                translate([s*(cw/2) - (s > 0 ? 0.01 : 0), -ct/2, crad_z0+hold_l+3.0])
-                    cube([0.01, ct, 0.01]);
+                translate([s > 0 ? cw/2 - lip : -(cw/2 - lip) - catch_w,
+                           ct/2 - catch_p, crad_z0 + hold_l])
+                    cube([catch_w, catch_p, catch_h]);
+                translate([s > 0 ? cw/2 - lip : -(cw/2 - lip) - catch_w,
+                           ct/2 - 0.01, crad_z0 + hold_l + catch_lead])
+                    cube([catch_w, 0.01, 0.01]);
             }
     }
 }
