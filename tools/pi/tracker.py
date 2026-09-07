@@ -204,6 +204,7 @@ def v4l2_manual(device, exposure_us, gain, verbose=True):
         ("auto_exposure", "1"), ("exposure_auto", "1"),          # 1 = manual
         ("exposure_time_absolute", str(max(1, exposure_us // 100))),
         ("exposure_absolute", str(max(1, exposure_us // 100))),
+        ("exposure_dynamic_framerate", "0"),
         ("gain", str(int(gain))),
         ("focus_automatic_continuous", "0"), ("focus_auto", "0"),
         ("focus_absolute", "0"),
@@ -245,6 +246,12 @@ class OpenCVCamera:
         if not self.cap.isOpened():
             sys.exit(f"could not open camera {device} "
                      "(on macOS, grant camera access to your terminal)")
+        # Ask for MJPEG before asking for a size. V4L2 otherwise hands back
+        # uncompressed YUYV, and 720p of that is ~18 MB/s - more than USB 2.0
+        # will carry, so the camera silently drops to ~10 fps. Requesting the
+        # format first is what makes a 30 fps mode available at all.
+        if sys.platform != "darwin":
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         # Height first, then width: AVFoundation negotiates a whole mode, not
         # two independent numbers, and the order changes what you get.
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
@@ -253,7 +260,10 @@ class OpenCVCamera:
         ok, f = self.cap.read()
         if not ok:
             sys.exit("camera opened but returned no frames")
-        print(f"camera actual frame {f.shape[1]}x{f.shape[0]}")
+        cc = int(self.cap.get(cv2.CAP_PROP_FOURCC))
+        fourcc = "".join(chr((cc >> 8 * i) & 0xFF) for i in range(4)) if cc else "?"
+        print(f"camera actual frame {f.shape[1]}x{f.shape[0]} {fourcc} "
+              f"@ {self.cap.get(cv2.CAP_PROP_FPS):.0f} fps")
         # Re-apply: opening the device resets controls on some UVC drivers.
         v4l2_manual(device, exposure_us, gain, verbose=False)
 
