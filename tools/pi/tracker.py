@@ -28,6 +28,7 @@ import argparse
 import asyncio
 import json
 import sys
+import threading
 import time
 
 import numpy as np
@@ -340,12 +341,111 @@ def parse_args():
     return p.parse_args()
 
 
+# --------------------------------------------------------------- live preview
+# At 2 ms the camera's frames look black to a human even when detection is
+# working perfectly, so aiming the camera by eye is impossible without a
+# stretched view - and an exhibition Pi has no screen of its own to put one on.
+# Serve it over HTTP instead, and let whoever is aiming watch from a phone.
+LATEST = {"gray": None, "blob": None, "stats": {}}
+LATEST_LOCK = threading.Lock()
+
+
+def _encode_preview(boost=True, width=640):
+    import cv2
+    with LATEST_LOCK:
+        gray, blob, stats = LATEST["gray"], LATEST["blob"], dict(LATEST["stats"])
+    if gray is None:
+        return None
+    img = gray
+    if width and img.shape[1] > width:
+        h = int(img.shape[0] * width / img.shape[1])
+        img = cv2.resize(img, (width, h), interpolation=cv2.INTER_AREA)
+    lo, hi = int(img.min()), int(img.max())
+    if boost and hi > lo:
+        # Stretch to full range. Without it a working camera and a camera with
+        # its lens covered look identical - both are a black rectangle.
+        img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX)
+    vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    if blob:
+        cx = int(blob["x"] * vis.shape[1])
+        cy = int(blob["y"] * vis.shape[0])
+        colour = (0, 255, 0) if blob["locked"] else (0, 165, 255)
+        cv2.circle(vis, (cx, cy), 18, colour, 2)
+        cv2.line(vis, (cx - 26, cy), (cx + 26, cy), colour, 1)
+        cv2.line(vis, (cx, cy - 26), (cx, cy + 26), colour, 1)
+    label = (f"raw {lo}-{hi}  luma {stats.get('max_luma', 0)}  "
+             f"sig {stats.get('max_sig', 0):.1f}  thr {stats.get('thr', 0):.1f}  "
+             + ("LOCKED" if blob and blob.get("locked")
+                else "detecting" if blob else "no detection"))
+    for colour, thick in (((0, 0, 0), 3), ((255, 255, 255), 1)):
+        cv2.putText(vis, label, (8, vis.shape[0] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, colour, thick, cv2.LINE_AA)
+    ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    return buf.tobytes() if ok else None
+
+
+PREVIEW_PAGE = b"""<!doctype html><title>IR camera preview</title>
+<style>body{margin:0;background:#111;color:#ddd;font:13px system-ui;text-align:center}
+img{max-width:100%;image-rendering:pixelated}p{padding:8px}</style>
+<h3>IR camera preview</h3><img src="/preview.mjpg?boost=1">
+<p>Contrast is stretched to full range - a correctly exposed IR frame is nearly
+black. If this shows only noise with no edges, the lens is blocked or facing
+something dark. Add <code>?boost=0</code> to see the true levels.</p>"""
+
+
 def serve_http(port, root):
-    import functools, http.server, threading
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=root)
+    import functools, http.server
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def _boost(self):
+            return "boost=0" not in (self.path.split("?", 1) + [""])[1]
+
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            if path == "/preview":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(PREVIEW_PAGE)))
+                self.end_headers()
+                self.wfile.write(PREVIEW_PAGE)
+            elif path == "/snapshot.jpg":
+                jpg = _encode_preview(self._boost())
+                if not jpg:
+                    self.send_error(503, "no frame yet")
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(jpg)))
+                self.end_headers()
+                self.wfile.write(jpg)
+            elif path == "/preview.mjpg":
+                self.send_response(200)
+                self.send_header("Content-Type", "multipart/x-mixed-replace; "
+                                                 "boundary=frame")
+                self.end_headers()
+                boost = self._boost()
+                try:
+                    while True:
+                        jpg = _encode_preview(boost)
+                        if jpg:
+                            self.wfile.write(b"--frame\r\nContent-Type: image/jpeg"
+                                             b"\r\nContent-Length: "
+                                             + str(len(jpg)).encode()
+                                             + b"\r\n\r\n" + jpg + b"\r\n")
+                        time.sleep(0.1)      # 10 fps is plenty for aiming
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            else:
+                super().do_GET()
+
+        def log_message(self, *a):
+            pass                              # the stats line owns the terminal
+
+    handler = functools.partial(Handler, directory=root)
     srv = http.server.ThreadingHTTPServer(("", port), handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     print(f"http   serving {root} on :{port}")
+    print(f"http   camera preview on :{port}/preview")
 
 
 async def run(args):
@@ -383,6 +483,10 @@ async def run(args):
             gray = await loop.run_in_executor(None, cam.read)
             blob = tracker.detect(gray)
             frames += 1
+            if args.serve:
+                with LATEST_LOCK:
+                    LATEST["gray"], LATEST["blob"] = gray, blob
+                    LATEST["stats"] = tracker.stats
 
             now = time.time()
             fix = bool(blob and blob["locked"])
