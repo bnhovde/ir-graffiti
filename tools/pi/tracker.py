@@ -151,7 +151,7 @@ class IRTracker:
 
 # --------------------------------------------------------------------- source
 class PiCamera:
-    def __init__(self, width, height, exposure_us, gain, fps):
+    def __init__(self, width, height, exposure_us=2000, gain=8.0, fps=60):
         from picamera2 import Picamera2
         self.cam = Picamera2()
         # R8 asks libcamera for single-channel 8-bit, which is what a mono
@@ -183,17 +183,63 @@ class PiCamera:
         self.cam.stop()
 
 
+class OpenCVCamera:
+    """Any UVC webcam, so the whole chain - detection, socket, browser,
+    calibration - can be exercised on a laptop before the Pi hardware lands.
+
+    Note this cannot set exposure on macOS; that is the limitation the Pi is
+    there to escape. Detection still works, it just has to lean on the rolling
+    background and adaptive threshold rather than a short exposure."""
+
+    def __init__(self, width, height, fps=30, device=0, **_):
+        import cv2
+        self.cv2 = cv2
+        backend = cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_ANY
+        self.cap = cv2.VideoCapture(device, backend)
+        if not self.cap.isOpened():
+            sys.exit(f"could not open camera {device} "
+                     "(on macOS, grant camera access to your terminal)")
+        # Height first, then width: AVFoundation negotiates a whole mode, not
+        # two independent numbers, and the order changes what you get.
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FPS, fps)
+        ok, f = self.cap.read()
+        if not ok:
+            sys.exit("camera opened but returned no frames")
+        print(f"camera actual frame {f.shape[1]}x{f.shape[0]}")
+
+    def read(self):
+        ok, f = self.cap.read()
+        if not ok:
+            return np.zeros((2, 2), np.uint8)
+        return self.cv2.cvtColor(f, self.cv2.COLOR_BGR2GRAY) if f.ndim == 3 else f
+
+    def close(self):
+        self.cap.release()
+
+
 class SyntheticCamera:
     """A moving dot on a noisy background, so the pipeline can be exercised and
     tested without the hardware."""
 
-    def __init__(self, width, height, **_):
+    def __init__(self, width, height, fps=60, **_):
         self.w, self.h = width, height
         self.t = 0
         self.rng = np.random.default_rng(0)
         self.led = True
+        self.interval = 1.0 / fps if fps else 0
+        self._next = time.time()
 
     def read(self):
+        # Real cameras block at their frame rate; this one would spin as fast as
+        # the CPU allows and flood the socket, so pace it deliberately.
+        if self.interval:
+            now = time.time()
+            wait = self._next - now
+            if wait > 0:
+                time.sleep(wait)
+            self._next = max(now, self._next) + self.interval
         self.t += 1
         img = (22 + self.rng.random((self.h, self.w)) * 14).astype(np.uint8)
         img[self.h // 3: self.h // 3 + self.h // 3, 40:40 + self.w // 4] = 110
@@ -212,7 +258,10 @@ class SyntheticCamera:
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--source", choices=("picamera", "synthetic"), default="picamera")
+    p.add_argument("--source", choices=("picamera", "webcam", "synthetic"),
+                   default="picamera",
+                   help="webcam runs the whole chain on a laptop before the Pi arrives")
+    p.add_argument("--device", type=int, default=0, help="webcam index")
     p.add_argument("--width", type=int, default=1280)
     p.add_argument("--height", type=int, default=800)
     p.add_argument("--fps", type=int, default=60)
@@ -225,6 +274,9 @@ def parse_args():
     p.add_argument("--port", type=int, default=WS_PORT)
     p.add_argument("--serve", type=int, default=0,
                    help="also serve the repo over HTTP on this port, e.g. 8000")
+    p.add_argument("--send-rate", type=int, default=90,
+                   help="max WebSocket messages per second. The browser paints "
+                        "at 60; flooding it only adds buffer latency")
     p.add_argument("--stats", action="store_true",
                    help="print a live line for aiming and tuning")
     return p.parse_args()
@@ -244,9 +296,14 @@ async def run(args):
     except ImportError:
         sys.exit("websockets is missing:\n\n    pip3 install websockets\n")
 
-    Source = PiCamera if args.source == "picamera" else SyntheticCamera
-    cam = Source(args.width, args.height,
-                 exposure_us=args.exposure, gain=args.gain, fps=args.fps)
+    Source = {"picamera": PiCamera, "webcam": OpenCVCamera,
+              "synthetic": SyntheticCamera}[args.source]
+    kw = {"fps": args.fps}
+    if args.source == "picamera":
+        kw.update(exposure_us=args.exposure, gain=args.gain)
+    if args.source == "webcam":
+        kw.update(device=args.device)
+    cam = Source(args.width, args.height, **kw)
     tracker = IRTracker(k=args.k, floor=args.floor, min_luma=args.min_luma)
     clients = set()
 
@@ -262,19 +319,25 @@ async def run(args):
     async def pump():
         loop = asyncio.get_running_loop()
         frames, t0, last_print = 0, time.time(), 0.0
+        last_send, was_fix = 0.0, False
+        send_interval = 1.0 / args.send_rate if args.send_rate else 0.0
         while True:
             gray = await loop.run_in_executor(None, cam.read)
             blob = tracker.detect(gray)
             frames += 1
 
-            msg = json.dumps({"lost": True} if not (blob and blob["locked"])
-                             else {"x": round(blob["x"], 5), "y": round(blob["y"], 5),
-                                   "area": blob["area"], "peak": blob["peak"]})
-            if clients:
+            now = time.time()
+            fix = bool(blob and blob["locked"])
+            # Send on a fixed cadence, but never swallow a change of state:
+            # dropping the transition to "lost" would leave the pen down.
+            if clients and (now - last_send >= send_interval or fix != was_fix):
+                msg = json.dumps({"lost": True} if not fix
+                                 else {"x": round(blob["x"], 5), "y": round(blob["y"], 5),
+                                       "area": blob["area"], "peak": blob["peak"]})
                 await asyncio.gather(*(c.send(msg) for c in list(clients)),
                                      return_exceptions=True)
+                last_send, was_fix = now, fix
 
-            now = time.time()
             if args.stats and now - last_print > 0.25:
                 s = tracker.stats
                 fps = frames / max(1e-6, now - t0)
