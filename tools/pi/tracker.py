@@ -183,18 +183,64 @@ class PiCamera:
         self.cam.stop()
 
 
+def v4l2_manual(device, exposure_us, gain, verbose=True):
+    """Force manual exposure/gain/focus on a UVC camera via v4l2-ctl.
+
+    This is the whole reason a modified webcam becomes usable on a Pi: the
+    control that macOS refuses to hand over is available on Linux. Kernel
+    versions disagree on the control names, so try both spellings and report
+    what actually took - believe the readback, not the request.
+    """
+    import shutil, subprocess
+    if sys.platform == "darwin" or not shutil.which("v4l2-ctl"):
+        if verbose:
+            print("v4l2   not available - exposure stays on auto "
+                  "(expected on macOS; on a Pi: sudo apt install v4l-utils)")
+        return False
+
+    dev = f"/dev/video{device}"
+    # exposure_time_absolute is in 100 us units, so 2000 us -> 20
+    pairs = [
+        ("auto_exposure", "1"), ("exposure_auto", "1"),          # 1 = manual
+        ("exposure_time_absolute", str(max(1, exposure_us // 100))),
+        ("exposure_absolute", str(max(1, exposure_us // 100))),
+        ("gain", str(int(gain))),
+        ("focus_automatic_continuous", "0"), ("focus_auto", "0"),
+        ("focus_absolute", "0"),
+        ("white_balance_automatic", "0"), ("white_balance_temperature_auto", "0"),
+    ]
+    applied = []
+    for name, value in pairs:
+        r = subprocess.run(["v4l2-ctl", "-d", dev, f"--set-ctrl={name}={value}"],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            applied.append(name)
+    if verbose:
+        print(f"v4l2   applied: {', '.join(applied) if applied else 'nothing'}")
+        r = subprocess.run(["v4l2-ctl", "-d", dev, "--list-ctrls"],
+                           capture_output=True, text=True)
+        for line in r.stdout.splitlines():
+            if any(k in line for k in ("exposure", "gain", "focus")):
+                print("      ", line.strip())
+    return bool(applied)
+
+
 class OpenCVCamera:
-    """Any UVC webcam, so the whole chain - detection, socket, browser,
-    calibration - can be exercised on a laptop before the Pi hardware lands.
+    """Any UVC webcam.
 
-    Note this cannot set exposure on macOS; that is the limitation the Pi is
-    there to escape. Detection still works, it just has to lean on the rolling
-    background and adaptive threshold rather than a short exposure."""
+    On a Pi this is a first-class option, not just a stand-in: v4l2 gives real
+    manual exposure, which is the single thing that makes IR tracking robust.
+    A modified C910 here is a genuinely usable camera. On macOS the controls
+    are refused and detection has to lean on the rolling background and
+    adaptive threshold instead.
+    """
 
-    def __init__(self, width, height, fps=30, device=0, **_):
+    def __init__(self, width, height, fps=30, device=0,
+                 exposure_us=2000, gain=8.0, **_):
         import cv2
         self.cv2 = cv2
-        backend = cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_ANY
+        v4l2_manual(device, exposure_us, gain)
+        backend = cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_V4L2
         self.cap = cv2.VideoCapture(device, backend)
         if not self.cap.isOpened():
             sys.exit(f"could not open camera {device} "
@@ -208,6 +254,8 @@ class OpenCVCamera:
         if not ok:
             sys.exit("camera opened but returned no frames")
         print(f"camera actual frame {f.shape[1]}x{f.shape[0]}")
+        # Re-apply: opening the device resets controls on some UVC drivers.
+        v4l2_manual(device, exposure_us, gain, verbose=False)
 
     def read(self):
         ok, f = self.cap.read()
@@ -302,7 +350,7 @@ async def run(args):
     if args.source == "picamera":
         kw.update(exposure_us=args.exposure, gain=args.gain)
     if args.source == "webcam":
-        kw.update(device=args.device)
+        kw.update(device=args.device, exposure_us=args.exposure, gain=args.gain)
     cam = Source(args.width, args.height, **kw)
     tracker = IRTracker(k=args.k, floor=args.floor, min_luma=args.min_luma)
     clients = set()
