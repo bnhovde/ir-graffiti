@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""
+IR spot tracker for the Raspberry Pi + OV9281.
+
+Runs headless on the Pi behind the TV. Reads the mono global-shutter camera at a
+fixed short exposure, finds the can's IR LED, and broadcasts its position over a
+WebSocket. The browser applies the homography and paints - keeping calibration in
+the UI, where the corner targets can actually be shown on the TV.
+
+Coordinates sent are normalised IMAGE coordinates (0..1), not screen coordinates.
+The Pi stays a dumb blob detector; test-wall.html already has solveHomography.
+
+    # on the Pi
+    sudo apt install -y python3-picamera2
+    pip3 install websockets numpy
+    ./tracker.py --stats
+
+    # anywhere, no camera needed - exercises the same pipeline
+    ./tracker.py --source synthetic --stats
+
+Why a fixed short exposure matters more than anything else here: ambient light
+accumulates in proportion to exposure time, while a bright LED saturates almost
+immediately. At 2 ms a lit room nearly vanishes and the LED still reads 255. This
+is the control macOS never let us have, and it does more than any filter.
+"""
+
+import argparse
+import asyncio
+import json
+import sys
+import time
+
+import numpy as np
+
+WS_PORT = 8765
+HTTP_PORT = 8000
+
+
+# --------------------------------------------------------------------- detect
+class IRTracker:
+    """Same pipeline as tools/irtest.py and the browser tracker.
+
+    Rolling background, adaptive threshold, windowed centroid, persistence gate.
+    The two non-obvious parts are commented where they appear - both were bugs
+    found the hard way.
+    """
+
+    def __init__(self, k=10.0, floor=20, min_luma=55, bg_rate=0.02,
+                 max_area_frac=0.01, lock_need=3, lock_dist_frac=0.05):
+        self.k = k
+        self.floor = floor
+        self.min_luma = min_luma
+        self.bg_rate = bg_rate
+        self.max_area_frac = max_area_frac
+        self.lock_need = lock_need
+        self.lock_dist_frac = lock_dist_frac
+        self.bg = None
+        self._streak = 0
+        self._last = None
+        self.stats = {}
+        self._buf = None          # preallocated scratch; see detect()
+
+    def reset(self):
+        self.bg = None
+        self._streak = 0
+        self._last = None
+
+    def detect(self, gray):
+        """gray: 2-D uint8. Returns a dict or None.
+
+        Written to allocate nothing per frame and to avoid boolean fancy
+        indexing, which on a million pixels costs more than everything else in
+        here put together. All the heavy numpy calls write into preallocated
+        buffers via out=.
+        """
+        h, w = gray.shape
+        n = h * w
+
+        if self._buf is None or self._buf[0].shape != gray.shape:
+            self._buf = tuple(np.empty((h, w), np.float32) for _ in range(3))
+            self.bg = None
+        f, sig, tmp = self._buf
+
+        np.copyto(f, gray)        # uint8 -> float32 in place
+
+        if self.bg is None:
+            self.bg = f.copy()
+            return None
+
+        np.subtract(f, self.bg, out=sig)
+        np.maximum(sig, 0, out=sig)
+
+        mean = float(sig.mean())
+        sd = float(sig.std())
+        thr = max(self.floor, mean + self.k * sd)
+
+        peak_idx = int(np.argmax(sig))
+        peak = float(sig.flat[peak_idx])
+        py, px = divmod(peak_idx, w)
+        luma = int(gray.flat[peak_idx])
+
+        self.stats = {"max_luma": int(gray.max()), "max_sig": round(peak, 1),
+                      "mean": round(mean, 2), "sd": round(sd, 2),
+                      "thr": round(thr, 1), "w": w, "h": h}
+
+        # Update the background ONLY where the frame is not currently lit.
+        # Otherwise holding the button still burns the LED into the reference
+        # and the spot fades after a second or two - you lose the stroke exactly
+        # when you stop moving.
+        if self.bg_rate:
+            np.subtract(f, self.bg, out=tmp)
+            tmp *= self.bg_rate
+            tmp *= (sig < thr)    # mask as 0/1 multiply, not fancy indexing
+            self.bg += tmp
+
+        if peak < thr or luma < self.min_luma:
+            self._streak = 0
+            self._last = None
+            return None
+
+        # Intensity-weighted centroid of the bright pixels around the peak.
+        r = max(12, w // 14)
+        y0, y1 = max(0, py - r), min(h, py + r)
+        x0, x1 = max(0, px - r), min(w, px + r)
+        win = sig[y0:y1, x0:x1]
+        mask = win >= thr
+        area = int(mask.sum())
+        if area == 0 or area > self.max_area_frac * n:
+            self._streak = 0
+            self._last = None
+            return None
+
+        wsum = float(win[mask].sum())
+        ys, xs = np.nonzero(mask)
+        cx = x0 + float((xs * win[ys, xs]).sum()) / wsum
+        cy = y0 + float((ys * win[ys, xs]).sum()) / wsum
+
+        # Persistence gate. Noise is spatially random frame to frame; a held LED
+        # is not. This replaces an absolute brightness gate, which cost range
+        # badly - at distance the dot is dim, not bright.
+        near = (self._last is not None and
+                np.hypot(cx - self._last[0], cy - self._last[1])
+                < self.lock_dist_frac * w)
+        self._streak = self._streak + 1 if near else 1
+        self._last = (cx, cy)
+
+        return {"x": cx / w, "y": cy / h, "area": area,
+                "peak": round(peak), "luma": luma,
+                "locked": self._streak >= self.lock_need}
+
+
+# --------------------------------------------------------------------- source
+class PiCamera:
+    def __init__(self, width, height, exposure_us, gain, fps):
+        from picamera2 import Picamera2
+        self.cam = Picamera2()
+        # R8 asks libcamera for single-channel 8-bit, which is what a mono
+        # sensor gives natively. Some stacks hand back 3 channels anyway, so
+        # read() copes with both rather than assuming.
+        cfg = self.cam.create_video_configuration(
+            main={"size": (width, height), "format": "R8"},
+            buffer_count=4,
+        )
+        self.cam.configure(cfg)
+        frame_us = int(1_000_000 / fps)
+        self.cam.set_controls({
+            "AeEnable": False,          # the entire point of this camera
+            "AwbEnable": False,
+            "ExposureTime": exposure_us,
+            "AnalogueGain": gain,
+            "FrameDurationLimits": (frame_us, frame_us),
+        })
+        self.cam.start()
+        time.sleep(0.5)
+
+    def read(self):
+        a = self.cam.capture_array("main")
+        if a.ndim == 3:
+            a = a[:, :, 0]
+        return a
+
+    def close(self):
+        self.cam.stop()
+
+
+class SyntheticCamera:
+    """A moving dot on a noisy background, so the pipeline can be exercised and
+    tested without the hardware."""
+
+    def __init__(self, width, height, **_):
+        self.w, self.h = width, height
+        self.t = 0
+        self.rng = np.random.default_rng(0)
+        self.led = True
+
+    def read(self):
+        self.t += 1
+        img = (22 + self.rng.random((self.h, self.w)) * 14).astype(np.uint8)
+        img[self.h // 3: self.h // 3 + self.h // 3, 40:40 + self.w // 4] = 110
+        if self.led:
+            cx = int(self.w * (0.5 + 0.3 * np.sin(self.t / 40)))
+            cy = int(self.h * (0.5 + 0.2 * np.cos(self.t / 55)))
+            yy, xx = np.ogrid[:self.h, :self.w]
+            img[(yy - cy) ** 2 + (xx - cx) ** 2 <= 9] = 255
+        return img
+
+    def close(self):
+        pass
+
+
+# ----------------------------------------------------------------------- main
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--source", choices=("picamera", "synthetic"), default="picamera")
+    p.add_argument("--width", type=int, default=1280)
+    p.add_argument("--height", type=int, default=800)
+    p.add_argument("--fps", type=int, default=60)
+    p.add_argument("--exposure", type=int, default=2000,
+                   help="microseconds. Short is the whole trick - 2000 is 2 ms")
+    p.add_argument("--gain", type=float, default=8.0)
+    p.add_argument("--k", type=float, default=10.0, help="threshold, in sigmas")
+    p.add_argument("--floor", type=int, default=20)
+    p.add_argument("--min-luma", type=int, default=55)
+    p.add_argument("--port", type=int, default=WS_PORT)
+    p.add_argument("--serve", type=int, default=0,
+                   help="also serve the repo over HTTP on this port, e.g. 8000")
+    p.add_argument("--stats", action="store_true",
+                   help="print a live line for aiming and tuning")
+    return p.parse_args()
+
+
+def serve_http(port, root):
+    import functools, http.server, threading
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=root)
+    srv = http.server.ThreadingHTTPServer(("", port), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    print(f"http   serving {root} on :{port}")
+
+
+async def run(args):
+    try:
+        import websockets
+    except ImportError:
+        sys.exit("websockets is missing:\n\n    pip3 install websockets\n")
+
+    Source = PiCamera if args.source == "picamera" else SyntheticCamera
+    cam = Source(args.width, args.height,
+                 exposure_us=args.exposure, gain=args.gain, fps=args.fps)
+    tracker = IRTracker(k=args.k, floor=args.floor, min_luma=args.min_luma)
+    clients = set()
+
+    async def handler(ws):
+        clients.add(ws)
+        print(f"ws     client connected ({len(clients)} total)")
+        try:
+            await ws.wait_closed()
+        finally:
+            clients.discard(ws)
+            print(f"ws     client gone ({len(clients)} total)")
+
+    async def pump():
+        loop = asyncio.get_running_loop()
+        frames, t0, last_print = 0, time.time(), 0.0
+        while True:
+            gray = await loop.run_in_executor(None, cam.read)
+            blob = tracker.detect(gray)
+            frames += 1
+
+            msg = json.dumps({"lost": True} if not (blob and blob["locked"])
+                             else {"x": round(blob["x"], 5), "y": round(blob["y"], 5),
+                                   "area": blob["area"], "peak": blob["peak"]})
+            if clients:
+                await asyncio.gather(*(c.send(msg) for c in list(clients)),
+                                     return_exceptions=True)
+
+            now = time.time()
+            if args.stats and now - last_print > 0.25:
+                s = tracker.stats
+                fps = frames / max(1e-6, now - t0)
+                where = (f"{blob['x']:.3f},{blob['y']:.3f} area {blob['area']:4d} "
+                         f"peak {blob['peak']:3.0f} {'LOCKED' if blob['locked'] else '...'}"
+                         if blob else "no detection")
+                print(f"\r{fps:5.1f} fps  luma {s.get('max_luma',0):3d}  "
+                      f"sig {s.get('max_sig',0):5.1f}  thr {s.get('thr',0):5.1f}  "
+                      f"{where}        ", end="", flush=True)
+                last_print = now
+            if now - t0 > 5:
+                frames, t0 = 0, now
+            await asyncio.sleep(0)
+
+    if args.serve:
+        import os
+        serve_http(args.serve, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    print(f"camera {args.source} {args.width}x{args.height} @ {args.fps} fps, "
+          f"{args.exposure} us, gain {args.gain}")
+    print(f"ws     listening on :{args.port}")
+    async with websockets.serve(handler, "", args.port):
+        try:
+            await pump()
+        finally:
+            cam.close()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(run(parse_args()))
+    except KeyboardInterrupt:
+        print()
