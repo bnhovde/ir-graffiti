@@ -184,7 +184,7 @@ class PiCamera:
         self.cam.stop()
 
 
-def v4l2_manual(device, exposure_us, gain, verbose=True):
+def v4l2_manual(device, exposure_us, gain, verbose=True, auto=False):
     """Force manual exposure/gain/focus on a UVC camera via v4l2-ctl.
 
     This is the whole reason a modified webcam becomes usable on a Pi: the
@@ -200,6 +200,13 @@ def v4l2_manual(device, exposure_us, gain, verbose=True):
         return False
 
     dev = f"/dev/video{device}"
+    if auto:
+        # Used only for the startup health check: a sensor on auto shows read
+        # noise, which is what tells a live camera from a dead stream.
+        for name in ("auto_exposure=3", "exposure_auto=3", "gain=64"):
+            subprocess.run(["v4l2-ctl", "-d", dev, f"--set-ctrl={name}"],
+                           capture_output=True, text=True)
+        return True
     # exposure_time_absolute is in 100 us units, so 2000 us -> 20
     pairs = [
         ("auto_exposure", "1"), ("exposure_auto", "1"),          # 1 = manual
@@ -241,11 +248,42 @@ class OpenCVCamera:
                  exposure_us=2000, gain=8.0, **_):
         import cv2
         self.cv2 = cv2
+        self.device = device
+        for attempt in range(1, 4):
+            self._open(width, height, fps)
+            # Validate BEFORE going to a short exposure, while the sensor is on
+            # auto and every frame should be full of read noise. A frame whose
+            # pixels are all one value means the camera enumerated and streamed
+            # but never actually started - the C910 does this on a cold plug
+            # (the kernel log shows its first probe failing with -5), and the
+            # only cure is to close it and open it again. Photo Booth shows the
+            # same thing: pick the camera, pick another, pick it back.
+            v4l2_manual(device, exposure_us, gain, verbose=False, auto=True)
+            f = self._settle(20)
+            if f is not None and int(f.max()) > int(f.min()):
+                break
+            print(f"camera returned a flat frame - reopening ({attempt}/3)")
+            self.cap.release()
+            time.sleep(0.6)
+        else:
+            print("camera never produced a live frame. Unplug it and plug it "
+                  "back in; if that fails, check it in another app first.")
+
+        cc = int(self.cap.get(cv2.CAP_PROP_FOURCC))
+        fourcc = "".join(chr((cc >> 8 * i) & 0xFF) for i in range(4)) if cc else "?"
+        print(f"camera actual frame {int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))}"
+              f"x{int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))} {fourcc} "
+              f"@ {self.cap.get(cv2.CAP_PROP_FPS):.0f} fps")
+        # Now drop to the short exposure the tracker actually wants. Re-applied
+        # after opening because opening resets controls on some UVC drivers.
         v4l2_manual(device, exposure_us, gain)
+
+    def _open(self, width, height, fps):
+        cv2 = self.cv2
         backend = cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_V4L2
-        self.cap = cv2.VideoCapture(device, backend)
+        self.cap = cv2.VideoCapture(self.device, backend)
         if not self.cap.isOpened():
-            sys.exit(f"could not open camera {device} "
+            sys.exit(f"could not open camera {self.device} "
                      "(on macOS, grant camera access to your terminal)")
         # Ask for MJPEG before asking for a size. V4L2 otherwise hands back
         # uncompressed YUYV, and 720p of that is ~18 MB/s - more than USB 2.0
@@ -258,15 +296,19 @@ class OpenCVCamera:
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FPS, fps)
-        ok, f = self.cap.read()
-        if not ok:
-            sys.exit("camera opened but returned no frames")
-        cc = int(self.cap.get(cv2.CAP_PROP_FOURCC))
-        fourcc = "".join(chr((cc >> 8 * i) & 0xFF) for i in range(4)) if cc else "?"
-        print(f"camera actual frame {f.shape[1]}x{f.shape[0]} {fourcc} "
-              f"@ {self.cap.get(cv2.CAP_PROP_FPS):.0f} fps")
-        # Re-apply: opening the device resets controls on some UVC drivers.
-        v4l2_manual(device, exposure_us, gain, verbose=False)
+
+    def _settle(self, n):
+        """Read n frames and return the last, giving auto exposure time to
+        converge. Returns None if the camera stops handing over frames."""
+        f = None
+        for _ in range(n):
+            ok, frame = self.cap.read()
+            if not ok:
+                return None
+            f = frame
+        if f is None:
+            return None
+        return self.cv2.cvtColor(f, self.cv2.COLOR_BGR2GRAY) if f.ndim == 3 else f
 
     def read(self):
         ok, f = self.cap.read()
