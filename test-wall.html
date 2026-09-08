@@ -202,11 +202,11 @@
 
   .bottom-controls{position:absolute;bottom:22px;left:26px;z-index:6;display:flex;align-items:center;gap:10px;}
   .swatches{
-    display:flex;align-items:center;gap:9px;padding:8px 12px;border-radius:24px;border:1px solid var(--btn-border);
+    display:flex;align-items:center;gap:13px;padding:12px 18px;border-radius:34px;border:1px solid var(--btn-border);
     background:var(--btn-bg);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);box-shadow:0 4px 14px rgba(0,0,0,0.1);
   }
-  .swatch{width:28px;height:28px;border-radius:50%;border:none;padding:0;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;outline:2px solid transparent;outline-offset:3px;}
-  .swatch.selected{outline:2.5px solid var(--selected-bg);}
+  .swatch{width:42px;height:42px;border-radius:50%;border:none;padding:0;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;outline:2px solid transparent;outline-offset:3px;}
+  .swatch.selected{outline:3px solid var(--selected-bg);}
   /* Arming ring: fills while the can dwells on the bar, so it is obvious
      something is about to happen rather than the menu just appearing. */
   .swatches.arming{box-shadow:0 0 0 3px var(--selected-bg),0 4px 14px rgba(0,0,0,0.1);}
@@ -241,13 +241,17 @@
   /* Bottom pills: the can's targets. Sized to be hittable at range, not to be
      pretty - the tracker cannot reliably land on anything smaller. */
   .can-pill{
-    display:flex;align-items:center;justify-content:center;gap:8px;height:44px;min-width:44px;padding:0 18px;
-    border-radius:24px;border:1px solid var(--btn-border);background:var(--btn-bg);position:relative;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;gap:12px;height:66px;min-width:66px;padding:0 26px;
+    border-radius:34px;border:1px solid var(--btn-border);background:var(--btn-bg);position:relative;cursor:pointer;
     -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);box-shadow:0 4px 14px rgba(0,0,0,0.1);
-    font:600 13px 'Space Grotesk',sans-serif;color:#161616;user-select:none;
+    font:600 19px 'Space Grotesk',sans-serif;color:#161616;user-select:none;
   }
   .can-pill.arming{box-shadow:0 0 0 3px var(--selected-bg),0 4px 14px rgba(0,0,0,0.1);}
-  .can-pill i{display:block;border-radius:50%;background:#161616;}
+  /* The size pill shows every step, not just the current one: a lone dot gives
+     no clue that it is a control, nor which way the sizes run. */
+  .can-pill .sz{display:flex;align-items:center;gap:11px;}
+  .can-pill .sz i{display:block;border-radius:50%;background:#161616;opacity:0.28;transition:opacity .12s ease;}
+  .can-pill .sz i.on{opacity:1;outline:3px solid var(--selected-bg);outline-offset:3px;}
   .can-picker-hint{position:absolute;bottom:14%;color:#fff;opacity:0.92;
     font:600 15px 'Space Grotesk',sans-serif;letter-spacing:0.01em;}
 
@@ -301,13 +305,6 @@
 </div>
 
 <div class="toolbar">
-  <div class="rel">
-    <button id="gp-theme-btn" class="theme-pill">
-      <span id="gp-theme-label">Paint blobs</span>
-      <svg viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </button>
-    <div id="gp-theme-menu" class="dropdown"></div>
-  </div>
 
   <div class="rel">
     <button id="gp-more-btn" class="iconbtn" title="More">
@@ -436,7 +433,7 @@
 <div class="bottom-controls">
   <div id="gp-swatches" class="swatches" style="position:relative;"></div>
   <div id="gp-mode-pill" class="can-pill" title="Mode"><span id="gp-mode-pill-label">Paint blobs</span></div>
-  <div id="gp-size-pill" class="can-pill" title="Brush size"><i id="gp-size-dot"></i></div>
+  <div id="gp-size-pill" class="can-pill" title="Brush size"><span id="gp-size-dots" class="sz"></span></div>
 </div>
 
 <script>
@@ -1539,9 +1536,9 @@ class PaintApp {
     this.theme.setColor(0);
     this.refreshSwatchOutlines();
     this.updateSettingsPanel();
-    document.getElementById('gp-theme-label').textContent = this.theme.label;
+    // The top mode selector is gone - the bottom pill is the only one now, so
+    // there is one control rather than two that can disagree.
     this.refreshCanPills();
-    document.querySelectorAll('#gp-theme-menu .dropdown-item').forEach(el => el.classList.toggle('selected', el.dataset.theme === id));
   }
 
   /* ---- pointer plumbing ---- */
@@ -1968,6 +1965,7 @@ class PaintApp {
 
   buildThemeMenu() {
     const menu = document.getElementById('gp-theme-menu');
+    if (!menu) return;          // removed from the toolbar; mode lives on the pill
     menu.innerHTML = '';
     for (const id of THEME_ORDER) {
       const label = new THEMES[id](this).label;
@@ -2046,10 +2044,17 @@ class PaintApp {
     // this again once there is.
     const lbl = document.getElementById('gp-mode-pill-label');
     if (lbl && this.theme) lbl.textContent = this.theme.label;
-    const dot = document.getElementById('gp-size-dot');
-    if (dot) {
-      const d = Math.round(8 + this.sizeScale * 12);
-      dot.style.width = d + 'px'; dot.style.height = d + 'px';
+    const dots = document.getElementById('gp-size-dots');
+    if (dots) {
+      const cur = this.nearestSizeStep();
+      dots.innerHTML = '';
+      SIZE_STEPS.forEach(v => {
+        const i = document.createElement('i');
+        const d = Math.round(7 + v * 13);
+        i.style.width = d + 'px'; i.style.height = d + 'px';
+        if (v === cur) i.className = 'on';
+        dots.appendChild(i);
+      });
     }
   }
   armCanPicker(frac, el) {
@@ -2075,12 +2080,25 @@ class PaintApp {
       if (it.dot) { const i = document.createElement('i');
                     i.style.width = it.dot + 'px'; i.style.height = it.dot + 'px'; d.appendChild(i); }
       else if (it.text) d.textContent = it.text;
+      // Mouse drives exactly the same menu: hover highlights, click picks. Two
+      // code paths for one control is how they drift apart.
+      const idx = row.children.length;
+      d.style.cursor = 'pointer';
+      d.addEventListener('mouseenter', () => this.highlightCanPicker(idx));
+      d.addEventListener('click', e => { e.stopPropagation(); this._pickerIndex = idx; this.closeCanPicker(true); });
       row.appendChild(d);
     });
-    document.getElementById('gp-can-picker').classList.add('show');
+    const back = document.getElementById('gp-can-picker');
+    back.classList.add('show');
+    back.onclick = () => this.closeCanPicker(false);   // click outside = cancel
     this._pickerOpen = true;
     this._pickerIndex = spec.current;
     this.updateCanPicker(this.vw / 2, this.vh / 2);
+  }
+  highlightCanPicker(i) {
+    const items = [...document.querySelectorAll('#gp-can-picker-row .can-picker-item')];
+    this._pickerIndex = i;
+    items.forEach((el, n) => el.classList.toggle('on', n === i));
   }
   updateCanPicker(x, y) {
     const items = [...document.querySelectorAll('#gp-can-picker-row .can-picker-item')];
@@ -2094,8 +2112,7 @@ class PaintApp {
       const d = dx * dx + dy * dy;
       if (d < bestD) { bestD = d; best = i; }
     });
-    this._pickerIndex = best;
-    items.forEach((el, i) => el.classList.toggle('on', i === best));
+    this.highlightCanPicker(best);
   }
   closeCanPicker(commit) {
     document.getElementById('gp-can-picker').classList.remove('show');
@@ -2129,20 +2146,19 @@ class PaintApp {
   }
 
   wireUI() {
-    const themeBtn = document.getElementById('gp-theme-btn'), themeMenu = document.getElementById('gp-theme-menu');
+
     const settingsBtn = document.getElementById('gp-settings-btn'), settingsPanel = document.getElementById('gp-settings-panel');
     const infoBtn = document.getElementById('gp-info-btn'), infoPanel = document.getElementById('gp-info-panel');
     const camBtn = document.getElementById('gp-cam-btn'), camPanel = document.getElementById('gp-cam-panel');
     const stencilBtn = document.getElementById('gp-stencil-btn'), stencilPanel = document.getElementById('gp-stencil-panel');
 
     const toggle = (btn, panel) => { const open = panel.classList.contains('open'); closeAllDropdowns(); if (!open) { panel.classList.add('open'); btn.classList.add('open'); } };
-    themeBtn.addEventListener('click', (e) => { e.stopPropagation(); toggle(themeBtn, themeMenu); });
     settingsBtn.addEventListener('click', (e) => { e.stopPropagation(); toggle(settingsBtn, settingsPanel); });
     infoBtn.addEventListener('click', (e) => { e.stopPropagation(); toggle(infoBtn, infoPanel); });
     camBtn.addEventListener('click', (e) => { e.stopPropagation(); toggle(camBtn, camPanel); });
     stencilBtn.addEventListener('click', (e) => { e.stopPropagation(); toggle(stencilBtn, stencilPanel); });
     document.addEventListener('click', () => closeAllDropdowns());
-    [themeMenu, settingsPanel, infoPanel, camPanel, stencilPanel].forEach(p => p.addEventListener('click', (e) => e.stopPropagation()));
+    [settingsPanel, infoPanel, camPanel, stencilPanel].forEach(p => p.addEventListener('click', (e) => e.stopPropagation()));
 
     document.getElementById('gp-undo').addEventListener('click', () => this.undo());
     document.getElementById('gp-clear').addEventListener('click', () => this.clearCanvas());
@@ -2155,8 +2171,6 @@ class PaintApp {
       .addEventListener('click', () => this.openCanPicker('mode'));
     document.getElementById('gp-size-pill')
       .addEventListener('click', () => this.openCanPicker('size'));
-    document.getElementById('gp-swatches')
-      .addEventListener('dblclick', () => this.openCanPicker('color'));
     this.refreshCanPills();
 
     this.wireFullscreen();
