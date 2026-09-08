@@ -102,42 +102,46 @@ sw_pin_d  = 2.0;
    Radial, out a nozzle boss on the side of the cap, the way a real spray can
    sprays - which is also straight at the camera, since the camera sits at the
    screen looking back at the user.
-   From the drawing: body 8.0 round (7.2 across the flats), dome / die disc 6.0,
-   thermal slug 6.2 underneath, tabs 1.5 wide x 1.05 thick spanning 14.5 tip to
-   tip, dome 2.6 proud of the body top face. The 120 deg part is 5.0 tall
-   overall, so the body itself is 2.4. The 60/90 deg parts in the same family
-   are 5.9 - the pocket seats on the body TOP face, so the dome lands in the
-   same place whichever one you have and only the tail gets longer. */
+
+   The emitter drops into a cast in the FRONT of the nozzle - a recess cut to
+   its own silhouette, body circle plus tab slot - and a thin bezel goes on over
+   it, leaving only the body and the dome outside. Wires reach the tabs through
+   two holes running back into the wiring chamber.
+
+   That replaces an earlier scheme where the LED went in from inside the cap and
+   slid forward down the bore. It was, in Bard's words, almost impossible to
+   slot in: you were threading a part with leads already soldered to it down a
+   channel you could not see into. Loading from the front is the same idea as
+   button_disc on its shelf under cap_top, and the LED no longer passes through
+   the wiring chamber at all - which is why the chamber, and the whole cap,
+   goes back to its original height.
+
+   From the drawing: body 8.0 round (7.2 across the flats), dome / die disc 6.0
+   standing 2.6 proud of the body top, thermal slug 6.2 underneath, tabs 1.5
+   wide x 1.05 thick spanning 14.5 tip to tip, marked IR+ / IR-. */
 nozzle_out    = 4.0;    // how far the nozzle spout stands proud of the cap
 pled_body_d   = 8.0;
 pled_dome_d   = 6.0;
 pled_dome_h   = 2.6;
-pled_ring     = 0.8;    // the forward-facing wall inside the nozzle: the ring
-                        // the tabs bear on, and the only material between the
-                        // LED and open air. Two perimeters at a 0.4 nozzle.
-                        // It no longer has anything to do with the body height
-                        // - it is just a stop - so it can be as thin as the
-                        // printer will hold. 0.6 works if yours is well tuned.
-pled_body_h   = 2.4;    // tab plane to the top of the body, dome excluded:
-                        // 5.0 total less the 2.6 dome. NOT used by the
-                        // geometry any more, only to report how far the part
-                        // ends up standing out. Whatever it really is, the
-                        // body protrudes by (body height - pled_ring) and the
-                        // dome is clear regardless.
-pled_tab_w    = 1.5;    // tab width, across the slot (the 1.05 thickness runs
-                        // along the bore, where the slot is long anyway)
+pled_slug_d   = 6.2;    // thermal slug on the underside - gets its own relief
+                        // so the body seats on its rim, not on the slug
+pled_body_h   = 2.4;    // tab plane to the top of the body, dome excluded.
+                        // Sets how far the body ends up standing out; if yours
+                        // measures more, more of it protrudes and nothing else
+                        // changes.
+pled_tab_w    = 1.5;    // tab width
+pled_tab_t    = 1.05;   // tab thickness - the bezel clamps this
+pled_tab_span = 14.5;   // tip to tip, untrimmed. Sizes the cast and the spout.
 pled_tab_stag = 1.5;    // THE TABS ARE STAGGERED, not opposite each other: one
-                        // leaves high, the other low. The slot has to swallow
-                        // both, so it is tab width + this. Generous on purpose
-                        // - it is read off a drawing, and a slot that is too
-                        // tall only lets the LED rock a little inside a bore
-                        // that already holds it over 3.65 mm of its length.
-                        // Keeping it symmetric also means the part goes in
-                        // either way up.
-pled_tab_span = 14.5;   // FULL, untrimmed. The tabs are the retention: they
-                        // cannot pass the 8.2 bore, so they bear on the ring
-                        // behind it and hold the LED in. That is why nothing
-                        // sits in front of the dome.
+                        // leaves high, the other low. The slot is tab width +
+                        // this, centred, so the part goes in either way up.
+                        // Read off a drawing - measure yours and tighten it.
+pled_cover_t  = 0.8;    // the bezel: as thin as the printer will hold, since
+                        // it is all that sits beside the dome
+pled_cover_fit= 0.10;   // bezel to rebate. Tight on purpose - this is a press
+                        // fit, not the sliding `fit` used elsewhere. A drop of
+                        // glue behind it if you want it permanent.
+pled_wire_d   = 2.5;    // wire pass-throughs, cast to chamber
 
 /* [Pry slots - for getting the caps back off] */
 pry_w     = 9.0;         // tangential width, both ends
@@ -170,16 +174,16 @@ bsnap_r = 0.40;
 
 /* ---------------------------------------------------------------- derived */
 can_bore   = can_d - 2*wall;         // 56
-pled_pocket_d = pled_body_d + 0.2;   // 8.2 - press fit on the body
-pled_bore_d   = pled_dome_d + 0.5;   // 6.5 - dome clearance
-// Where the tabs bear, and so the front of the ring. This, not the bore
-// length, is what sets the thickness of the forward-facing wall.
-pled_tab_y    = cap_od/2 + nozzle_out - pled_ring;
-// Clear space under the disc: the chamber the emitter lies in, so it scales
-// with the pocket. The margin is 1.5, which puts the disc 0.5 above the seated
-// LED - the disc is what stops it lifting back out of its cradle - and keeps
-// the cap as short as the part allows.
-shelf_gap  = pled_pocket_d + 1.5;
+pled_pocket_d = pled_body_d + 0.4;   // 8.4 - body clearance through the bezel
+pled_tab_h    = pled_tab_w + pled_tab_stag + 0.3;   // 3.3 - swallows the stagger
+pled_rebate_d = pled_tab_span + 0.5;                // 15.0 - the bezel sits here
+pled_seat_d   = pled_cover_t + pled_tab_t + 0.15;   // 2.0 - cast floor depth
+// How far the part ends up outside the nozzle face. The body seats on the cast
+// floor, so anything of it deeper than the seat sticks out, and the dome after.
+pled_proud    = pled_body_h - (pled_seat_d - pled_cover_t);
+// The wiring chamber holds only wires now - the LED loads from the front - so
+// this is back to what it was before the power emitter, and so is the cap.
+shelf_gap  = 6.0;
 cap_bore   = cap_od - 2*cap_wall;    // 32
 skirt_bore = neck_d + fit;           // 18.3
 skirt_z    = neck_h + 0.5;           // cap seats on the shoulder, not the neck
@@ -203,10 +207,9 @@ rail_p = 1.5;    // how far they poke into the bore
 // --- nozzle boss. Sits at the chamber level, below the disc, so the whole
 //     thing lives in cap_body: no channel has to cross the cap_top joint.
 nozzle_z      = (skirt_z + shelf_z)/2;
-// Spout: sized by the TAB SPAN, not the body, because the tabs have to sit
-// inside it - they are what stops the LED pushing out the front. 1.5 of wall
-// beyond each tab tip.
-nozzle_tip_d  = pled_tab_span + 3.0;                           // 17.5
+// Spout: sized by the bezel rebate, which is itself sized by the tab span.
+// 1.5 of wall around the rebate.
+nozzle_tip_d  = pled_rebate_d + 3.0;                           // 18.0
 nozzle_col_d  = nozzle_tip_d + 8;                         // collar at the wall
 nozzle_col_l  = (nozzle_col_d - nozzle_tip_d)/2;          // 45 deg -> no support
 // sink the collar just far enough that its rim is inside the cap's curve
@@ -298,8 +301,8 @@ module cap_body() {
                 translate([-pry_w/2, cap_od/2 - pry_d, cap_body_h - pry_h])
                     cube([pry_w, pry_d + 1, pry_h + 0.01]);
 
-            // LED cavity, bored radially out through the nozzle
-            power_led_cavity();
+            // LED cast, cut into the front of the nozzle
+            power_led_cast();
         }
 
         // keying rails, added after the bores so they survive
@@ -355,39 +358,57 @@ module nozzle_boss() {
     }
 }
 
-/* Cavity for the 8 mm power emitter.
+/* Cast for the 8 mm power emitter, cut into the FRONT of the nozzle.
 
-   The body sits in an 8.2 bore that runs right out to the nozzle face, so it
-   ends up flush and the entire 2.6 mm dome stands outside with nothing at all
-   in front of it - no lip, no countersink, no vignetting, the full 120 deg.
+   Three steps in from the face:
+     1. a rebate the bezel drops into,
+     2. the cast proper - the LED's own silhouette, body circle plus tab slot -
+        which the emitter drops into from outside,
+     3. a relief for the thermal slug, so the body seats on its rim.
 
-   What holds it in is the tabs: they span 14.5 and cannot pass an 8.2 bore, so
-   they bear on the ring behind it. That is the whole trick, and it is why the
-   spout is sized by the tab span rather than by the body.
+   Two wire holes run from the cast back into the wiring chamber. Solder the
+   leads on, feed them through, drop the LED in, press the bezel on.
 
-   Assembly: drop it in from the top of the wiring chamber with the leads
-   already soldered, then push it forward until the tabs stop. The tab slot ends
-   at exactly that plane. The drop-in channel above is only body-wide, because a
-   full tab-width channel that high would break out through the spout.
+   Nothing is threaded down a blind channel, which is what made the previous
+   version unbuildable. It is also the same pattern as button_disc: a part that
+   sits in a recess, closed by a cover.
 
-   Printing: the channel removes what would have been the bore's ceiling, so
-   nothing bridges over the LED. cap_body still prints rim up, no support. */
-module power_led_cavity() {
+   Printing: cap_body still goes rim up. The cast is a horizontal pocket, so its
+   ceiling is a short bridge - 8.4 across at worst - and the wire holes are
+   horizontal too, which is why they are round and small. */
+module power_led_cast() {
     y_face = cap_od/2 + nozzle_out;
-    y_back = chamber_d/2 - 1;                  // overshoot: tangency breaks CGAL
-    // body bore, all the way out to the face
-    translate([0, y_face + 0.01, nozzle_z]) rotate([90,0,0])
-        cylinder(h = y_face - y_back + 0.02, d = pled_pocket_d);
-    // tab slot: stops at the bearing plane, which is what retains the LED.
-    // Tall enough for the stagger, and centred so either orientation fits.
-    tab_h = pled_tab_w + pled_tab_stag + 0.3;
-    translate([-(pled_tab_span + 0.4)/2, y_back, nozzle_z - tab_h/2])
-        cube([pled_tab_span + 0.4, pled_tab_y - y_back, tab_h]);
-    // drop-in channel: body-wide only, up past the shelf
-    translate([-(pled_pocket_d + 0.4)/2, y_back, nozzle_z])
-        cube([pled_pocket_d + 0.4, pled_tab_y - y_back, shelf_z - nozzle_z + 0.5]);
+    translate([0, y_face + 0.01, nozzle_z]) rotate([90,0,0]) {
+        cylinder(h = pled_cover_t + 0.01, d = pled_rebate_d);       // bezel rebate
+        cylinder(h = pled_seat_d + 0.01,  d = pled_pocket_d);       // body
+        translate([0,0,pled_seat_d])
+            cylinder(h = 0.4, d = pled_slug_d + 0.4);               // slug relief
+    }
+    // tab slot: part of the cast, so the emitter drops straight in
+    translate([-(pled_tab_span + 0.4)/2, y_face - pled_seat_d,
+               nozzle_z - pled_tab_h/2])
+        cube([pled_tab_span + 0.4, pled_seat_d + 0.01, pled_tab_h]);
+    // Wires, out to the chamber. These sit off-axis, so they do NOT reach the
+    // chamber at y = chamber_d/2 - the wall curves away from them. At x = 5.75
+    // the chamber edge is at y = 11.66, so a hole ending at 13 would dead-end
+    // in solid material. Run them well past it and let the chamber take the
+    // surplus; that also avoids ending tangent to the chamber cylinder, which
+    // CGAL turns non-manifold.
+    wire_x = pled_tab_span/2 - 1.5;
+    wire_y = sqrt(pow(chamber_d/2, 2) - pow(wire_x, 2)) - 3;
+    for (sx = [-1, 1])
+        translate([sx * wire_x, wire_y, nozzle_z]) rotate([-90,0,0])
+            cylinder(h = y_face - pled_seat_d - wire_y + 0.01, d = pled_wire_d);
 }
 
+/* The bezel. Prints flat, no support, one perimeter of a job. */
+module nozzle_cap() {
+    difference() {
+        cylinder(h = pled_cover_t, d = pled_rebate_d - pled_cover_fit);
+        translate([0,0,-0.01])
+            cylinder(h = pled_cover_t + 0.02, d = pled_pocket_d);
+    }
+}
 
 /* =========================================================== 4. BUTTON DISC */
 module button_disc() {
@@ -526,6 +547,7 @@ module layout_all() {
     translate([-(can_d/2 + cap_od/2 + 15), 0, 0]) cap_body();
     translate([-(can_d/2 + cap_od/2 + 15), cap_od + 12, -disc_z1]) cap_top();
     translate([-(can_d/2 + cap_od/2 + 15), -(cap_od + 12), 0]) button_disc();
+    translate([-(can_d/2 + cap_od/2 + 15), -(cap_od + 12), 8]) nozzle_cap();
 }
 
 module layout_assembly() {
@@ -534,6 +556,9 @@ module layout_assembly() {
         cap_body();
         translate([0,0,shelf_z]) button_disc();
         cap_top();
+        // bezel, shown seated in its rebate
+        translate([0, cap_od/2 + nozzle_out - pled_cover_t, nozzle_z])
+            rotate([-90,0,0]) nozzle_cap();
     }
     translate([0,0,-base_th]) bottom_cap();
 }
@@ -544,16 +569,14 @@ else if (part == "body")        body();
 else if (part == "cap_body")    cap_body();
 else if (part == "cap_top")     translate([0,0,-disc_z1]) cap_top();
 else if (part == "button_disc") button_disc();
+else if (part == "nozzle_cap")  nozzle_cap();
 else if (part == "bottom_cap")  bottom_cap();
 else if (part != "none")        layout_all();
 
-echo(str("LED: body ", pled_body_h - pled_ring, " proud, dome tip ",
-         pled_body_h - pled_ring + pled_dome_h,
-         " proud of the face; front ring ", pled_ring, " thick; tab slot ",
-         pled_tab_w + pled_tab_stag + 0.3, " tall x ", pled_tab_span + 0.4,
-         " wide, bearing at y=", pled_tab_y, " on ",
-         (nozzle_tip_d - pled_pocket_d)/2, " of ring; spout ", nozzle_tip_d,
-         ", spout wall beside the slot ",
-         sqrt(pow(nozzle_tip_d/2,2) - pow((pled_tab_w+pled_tab_stag+0.3)/2,2))
-           - (pled_tab_span+0.4)/2,
-         "; cap ", roof_z1, " tall"));
+echo(str("LED: rebate ", pled_rebate_d, " x ", pled_cover_t,
+         ", cast floor at ", pled_seat_d,
+         ", tab slot ", pled_tab_h, " x ", pled_tab_span + 0.4,
+         "; body stands ", pled_proud, " proud, dome tip ",
+         pled_proud + pled_dome_h,
+         "; bezel ", pled_rebate_d - pled_cover_fit, " od / ", pled_pocket_d,
+         " id; spout ", nozzle_tip_d, ", cap ", roof_z1, " tall"));

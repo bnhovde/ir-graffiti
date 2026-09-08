@@ -45,16 +45,17 @@ which `localhost` and HTTPS satisfy and a local file does not.
 
 ## The can
 
-Five printed parts, modelled parametrically in [`canv2.scad`](canv2.scad). All
-print without supports. About 165 mm tall, 60 mm diameter.
+Six printed parts, modelled parametrically in [`canv2.scad`](canv2.scad). All
+print without supports. About 160 mm tall, 60 mm diameter.
 
 | Part | Key dimensions | Notes |
 |---|---|---|
 | `body` | ⌀60 × 145 | 2 mm wall, 15 mm shoulder cone, 18 mm neck with a snap bead. Prints upright, open end down. |
-| `cap_body` | ⌀36 × 26.3 | Internal shelf carries the button plate so press force goes into the can, not the plate. Nozzle spout ⌀17.5, standing 4 mm proud, with a ⌀8.2 bore for the power emitter. |
+| `cap_body` | ⌀36 × 22.6 | Internal shelf carries the button plate so press force goes into the can, not the plate. Nozzle spout ⌀18, standing 4 mm proud, with the LED cast in its face. |
 | `cap_top` | ⌀36, 4.1 plug | Snaps on via a split collet. Pry slot at the seam opposite the nozzle. |
 | `button_disc` | ⌀31.7 × 2.5 | Holds the switch. Pin holes on a 12.5 × 4.5 grid. |
 | `bottom_cap` | ⌀60 × 65.5 | Snap-in base with a slide-in cradle for the battery holder. Two pry slots at 0° and 180°. |
+| `nozzle_cap` | ⌀14.9 × 0.8 | The bezel. Presses into the nozzle rebate and clamps the LED into its cast. Prints flat. |
 
 Set `part=` to export one part, or leave it at `"all"` for the layout view.
 Exported STLs are in [`stl/`](stl). Everything derives from the parameter block
@@ -63,36 +64,44 @@ at the top; the numbers worth knowing are `fit` (0.30, raise it if parts bind),
 
 ### How the emitter mounts
 
-The nozzle holds the LED in a ⌀8.2 bore that runs out to the face, and **the
-tabs are the retention** — they span 14.5 mm and cannot pass a ⌀8.2 hole, so they
-bear on the ring behind it. Nothing sits in front of the dome, which is the whole
-point: the full 120° gets out.
+The LED **drops into a cast in the front of the nozzle** and a thin bezel presses
+on over it, leaving the body and dome outside. Same pattern as `button_disc`
+sitting on its shelf under `cap_top`: a part in a recess, closed by a cover.
+
+Three steps in from the nozzle face:
+
+```
+0.0 → 0.8    ⌀15.0 rebate      the bezel sits here
+0.8 → 2.0    ⌀8.4 + tab slot   the cast: the LED's own silhouette
+2.0 → 2.4    ⌀6.6 relief       so the body seats on its rim, not the slug
+```
+
+Two ⌀2.5 wire holes run from the cast back into the wiring chamber. **Solder the
+leads on, feed them through, drop the LED in, press the bezel on.**
 
 | Parameter | Value | Why |
 |---|---|---|
-| `pled_ring` | 0.8 | The forward-facing wall — just a stop for the tabs, so as thin as the printer holds. Two perimeters at a 0.4 nozzle |
-| `pled_tab_span` | 14.5 | Full, untrimmed. This sizes the spout, not the body |
+| `pled_cover_t` | 0.8 | Bezel thickness — all that sits beside the dome, so as thin as the printer holds |
+| `pled_cover_fit` | 0.10 | Bezel to rebate. Tight on purpose: a press fit, not the sliding `fit` used elsewhere. A drop of glue behind it if you want it permanent |
+| `pled_tab_span` | 14.5 | Untrimmed. Sizes the cast and hence the spout |
 | `pled_tab_stag` | 1.5 | The tabs are **staggered, not opposite**. Slot is `tab_w + this`, centred, so the part goes in either way up. Read off a drawing — measure yours |
-| `pled_body_h` | 2.4 | Reporting only; does not touch the geometry, so an uncertain measurement cannot move the model |
+| `pled_body_h` | 2.4 | Tab plane to body top. Sets how far the body protrudes; more just means more sticks out |
 
-Assembly is drop-in: solder the leads first, drop the LED into the wiring chamber
-from above, push it forward until the tabs stop. `cap_body` prints rim up with no
-support — the drop-in channel removes what would have been the bore's ceiling.
+The body ends up 1.2 mm proud and the dome tip 3.8 mm clear of the face, with
+nothing in front of the dome — the full 120°.
 
-The model echoes its own key numbers on render, which is worth reading:
+> [!NOTE]
+> **An earlier version loaded the LED from inside the cap**, sliding it forward
+> down the bore onto a shoulder, with the tabs as retention. It verified fine and
+> was almost impossible to build: you were threading a part with leads already
+> soldered to it down a channel you could not see into. Front-loading also means
+> the LED never enters the wiring chamber, so the chamber — and the whole cap —
+> goes back to its original height, 24.6 mm rather than 28.3.
 
-```
-LED: body 1.6 proud, dome tip 4.2 proud of the face; front ring 0.8 thick;
-tab slot 3.3 tall x 14.9 wide, bearing at y=21.2 on 4.65 of ring; spout 17.5
-```
-
-**Print orientation:** `body` upright open end down · `cap_body` rim up ·
-`cap_top` **upside down**, roof on the bed · `button_disc` flat ·
-`bottom_cap` plate on the bed.
-
-**To open either end:** flat screwdriver into the slot at the seam, twist. One
-at the top opposite the nozzle, two at the bottom so you can walk the cap off
-level.
+> [!TIP]
+> The ⌀15 rebate ceiling is the largest bridge in the part, about 10 mm across
+> but only 0.8 mm deep. If it sags enough that the bezel will not seat flush,
+> scrape it or raise `pled_cover_fit`.
 
 ### Electronics
 
@@ -133,9 +142,9 @@ Polarity is printed on the part: **IR+** and **IR−** next to their tabs, so th
 is no long-leg/short-leg guessing any more.
 
 > [!TIP]
-> **Solder the leads before fitting the LED.** Once it is seated the tabs sit
-> down a 8.2 mm bore. The tabs are bonded to the thermal slug and sink heat fast,
-> so use a big tip and be quick.
+> **Solder the leads before fitting the LED**, then feed them back through the
+> wire holes. The tabs are bonded to the thermal slug and sink heat fast, so use
+> a big tip and be quick.
 
 > [!WARNING]
 > **Which switch legs.** On a 4-leg tactile switch the two legs **12.5 mm apart,
