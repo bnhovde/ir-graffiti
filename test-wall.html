@@ -95,6 +95,13 @@
   #gp-more-menu .iconbtn:hover{background:var(--panel-hover-bg);}
   #gp-more-menu .iconbtn svg{width:18px;height:18px;flex:none;}
   #gp-more-menu .mi-label{white-space:nowrap;}
+  /* Panels belonging to menu rows are anchored to the VIEWPORT, not to their
+     row. Dropping from the row put the camera panel's bottom at 765 px on a
+     720 px screen - the lower the row, the further off it fell. */
+  #gp-more-menu .panel{
+    position:fixed;top:78px;right:252px;left:auto;bottom:auto;
+    max-height:calc(100vh - 104px);overflow-y:auto;
+  }
   .dropdown-item{
     display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;border:none;background:none;
     font:600 13px 'Space Grotesk',sans-serif;color:var(--panel-fg);text-align:left;cursor:pointer;width:100%;
