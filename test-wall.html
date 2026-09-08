@@ -1951,6 +1951,12 @@ class PaintApp {
         ? btn.parentElement : btn;
       menu.appendChild(node);
     }
+    // Order the bar as sketched: [ mode ] [ clear ] [ more ]. The button is
+    // declared before gp-clear in the markup, and the items that used to sit
+    // between them have just been moved away.
+    const more = document.getElementById('gp-more-btn').parentElement;
+    more.parentElement.appendChild(more);
+
     document.getElementById('gp-more-btn').addEventListener('click', e => {
       e.stopPropagation();
       const open = menu.classList.contains('open');
