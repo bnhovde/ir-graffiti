@@ -59,6 +59,13 @@ WAKELOCK = """
 
 def main():
     args = sys.argv[1:]
+    # --timeout has to outlast the expression itself: a measurement that runs
+    # for 30 s inside the page needs more than 30 s of patience outside it.
+    timeout = 30
+    if "--timeout" in args:
+        i = args.index("--timeout")
+        timeout = float(args[i + 1])
+        del args[i:i + 2]
     if not args:
         sys.exit(__doc__)
     if args[0] == "--connect":
@@ -85,7 +92,7 @@ def main():
         expr = WAKELOCK
     else:
         expr = args[0]
-    print(json.dumps(asyncio.run(evaluate(expr)), indent=2))
+    print(json.dumps(asyncio.run(evaluate(expr, timeout)), indent=2))
 
 
 if __name__ == "__main__":
