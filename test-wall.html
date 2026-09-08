@@ -1097,18 +1097,38 @@ class PiTracker {
   connect(url) {
     this.disconnect();
     this.url = url;
+    this._wantOpen = true;
+    this._open();
+  }
+  _open() {
     this.state = 'connecting';
-    try { this.ws = new WebSocket(url); }
-    catch (e) { this.state = 'error'; return; }
-    this.ws.onopen = () => { this.state = 'live'; };
-    this.ws.onclose = () => { if (this.state !== 'idle') this.state = 'error'; };
-    this.ws.onerror = () => { this.state = 'error'; };
+    this._notify();
+    try { this.ws = new WebSocket(this.url); }
+    catch (e) { this.state = 'error'; this._notify(); this._retry(); return; }
+    this.ws.onopen = () => { this.state = 'live'; this._notify(); };
+    this.ws.onclose = () => {
+      if (!this._wantOpen) return;
+      this.state = 'error'; this.last = null; this._notify(); this._retry();
+    };
+    this.ws.onerror = () => { this.state = 'error'; this._notify(); };
     this.ws.onmessage = (ev) => this.handle(ev.data);
   }
+  _retry() {
+    // The Pi restarts its tracker on failure, so the socket comes back on its
+    // own. A page that gave up on the first drop needed a person to notice a
+    // dead wall and reload it - which on an exhibition machine with no
+    // keyboard means noticing from across the room.
+    clearTimeout(this._retryT);
+    if (this._wantOpen) this._retryT = setTimeout(() => this._open(), 1500);
+  }
+  _notify() { if (this.onstate) { try { this.onstate(this.state); } catch (e) {} } }
   disconnect() {
+    this._wantOpen = false;
+    clearTimeout(this._retryT);
     if (this.ws) { const w = this.ws; this.ws = null; this.state = 'idle';
                    try { w.close(); } catch (e) {} }
     this.last = null;
+    this._notify();
   }
 
   handle(raw) {
@@ -2244,9 +2264,21 @@ class PaintApp {
     document.getElementById('gp-cam-mode-pi').addEventListener('click', () => this.setCamMode('pi'));
     const piUrl = document.getElementById('gp-pi-url');
     piUrl.value = `ws://${location.hostname || 'raspberrypi.local'}:8765`;
+    this.piTracker.onstate = st => {
+      if (st === 'live') {
+        this.setCamStatus(this.piTracker.calibrated
+          ? 'Connected to the tracker.'
+          : 'Connected. Now tap "Calibrate 4 corners".');
+      } else if (st === 'connecting') {
+        this.setCamStatus('Connecting to ' + this.piTracker.url + ' …');
+      } else if (st === 'error') {
+        this.setCamStatus('Lost the tracker at ' + this.piTracker.url + ' — retrying…');
+      } else {
+        this.setCamStatus('');
+      }
+    };
     document.getElementById('gp-pi-connect').addEventListener('click', () => {
       this.piTracker.connect(piUrl.value.trim());
-      this.setCamStatus('Connecting to ' + piUrl.value.trim() + ' …');
     });
     document.getElementById('gp-pi-calib').addEventListener('click', () => this.beginIRCalibration());
     document.getElementById('gp-cam-ir-calib').addEventListener('click', () => this.beginIRCalibration());
