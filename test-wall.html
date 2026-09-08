@@ -1378,7 +1378,26 @@ class PaintApp {
     // stopped requestAnimationFrame from rescheduling, painting would silently stop forever.
     try {
       const now = performance.now();
-      this.octx.clearRect(0, 0, this.vw, this.vh);
+      // Clearing the whole overlay every frame dirties a full-screen canvas, and
+      // the compositor then re-uploads it to the GPU every frame - ~3.7 MB at
+      // 1280x720. Measured on a Pi 5: 30 fps with this layer live, 59 with it
+      // hidden. Half the frame budget, to draw a cursor.
+      //
+      // So when the layer carries nothing but the cursor - which is the whole
+      // time in Blobs mode - clear only the region the cursor actually touched.
+      // Any floaters or drips and we go back to clearing everything, because
+      // then the layer genuinely is full-screen.
+      const heavy = ((this.theme.floaters && this.theme.floaters.length) || 0) +
+                    ((this.drips && this.drips.length) || 0) > 0;
+      if (heavy || this._ovFullDirty) {
+        this.octx.clearRect(0, 0, this.vw, this.vh);
+        this._ovFullDirty = heavy;      // stays true until the last one is gone
+        this._ovRect = null;
+      } else if (this._ovRect) {
+        const r = this._ovRect;
+        this.octx.clearRect(r[0], r[1], r[2], r[3]);
+        this._ovRect = null;
+      }
       this.runMasked(() => {
         this.theme.renderOverlay(now);
         this.renderDrips(now);
@@ -1398,6 +1417,11 @@ class PaintApp {
     if (!this.cursorVisible || !this.cursorPos) return;
     const ctx = this.octx;
     const r = 10 + 12 * this.sizeScale;
+    // Remember what this touched so the next frame can clear just that, instead
+    // of the whole layer. Padded for the 2 px stroke and rounded outwards.
+    const pad = r + 4;
+    this._ovRect = [Math.floor(this.cursorPos.x - pad), Math.floor(this.cursorPos.y - pad),
+                    Math.ceil(pad * 2), Math.ceil(pad * 2)];
     ctx.save();
     ctx.beginPath(); ctx.arc(this.cursorPos.x, this.cursorPos.y, r + 1, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 2; ctx.stroke();
