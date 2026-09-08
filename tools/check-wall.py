@@ -24,12 +24,12 @@ REQUIRED = [
     ("class PiTracker", "Pi tracking"),
     ("solveHomography", "4-corner calibration"),
     ("canEmaAlpha", "cursor smoothing is tunable"),
-    ("_ovRect", "overlay dirty-rect fix"),
+    ("_ovRects", "overlay dirty-rect fix"),
     ("liveStamps && t.liveStamps", "overlay ghost fix"),
     ("window.app =", "CDP access - the Pi has no mouse or keyboard"),
 ]
 # Methods the Pi path needs whole, not merely mentioned.
-METHODS = ["runCanLoop", "onCanFrame", "beginIRCalibration", "endIRCalibration",
+METHODS = ["runCanLoop", "onCanFrames", "beginIRCalibration", "endIRCalibration",
            "toggleIRDiagnostics", "startPreviewPump", "setCamMode", "activeTracker"]
 
 

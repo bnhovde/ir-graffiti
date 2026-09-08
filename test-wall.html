@@ -55,6 +55,7 @@
   .brand.invent svg{height:18.7px;}
 
   .iconbtn{
+    position:relative;
     width:38px;height:38px;border-radius:50%;border:1px solid var(--btn-border);
     background:var(--btn-bg);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
     box-shadow:0 4px 14px rgba(0,0,0,0.10);display:flex;align-items:center;justify-content:center;
@@ -254,6 +255,15 @@
     font:600 19px 'Space Grotesk',sans-serif;color:#161616;user-select:none;
   }
   .can-pill.arming{box-shadow:0 0 0 3px var(--selected-bg),0 4px 14px rgba(0,0,0,0.1);}
+  /* Clear is destructive and lives on a small icon, so it arms visibly and
+     takes longer than the menus - the growing ring IS the confirmation. */
+  .iconbtn.arming{box-shadow:0 0 0 3px #e5484d;}
+  .iconbtn.arming::after{
+    content:'';position:absolute;inset:-8px;border-radius:50%;pointer-events:none;
+    background:conic-gradient(#e5484d calc(var(--arm,0)*1turn),transparent 0);
+    -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 0);
+    mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 0);
+  }
   /* The size pill shows every step, not just the current one: a lone dot gives
      no clue that it is a control, nor which way the sizes run. */
   .can-pill .sz{display:flex;align-items:center;gap:11px;}
@@ -1135,9 +1145,14 @@ class PiTracker {
     let m;
     try { m = JSON.parse(raw); } catch (e) { return; }
     this.stats = m;
-    if (m.lost || typeof m.x !== 'number') { this.last = null; return; }
-    this.last = { x: m.x, y: m.y, area: m.area || 0, peak: m.peak || 0,
-                  luma: m.peak || 0, locked: true };
+    if (m.lost || typeof m.x !== 'number') { this.last = null; this.blobs = []; return; }
+    // One entry per can. Older trackers sent no blobs array, so fall back to
+    // the single top-level spot and give it an id.
+    this.blobs = (m.blobs && m.blobs.length ? m.blobs
+                  : [{ id: 0, x: m.x, y: m.y, area: m.area, peak: m.peak }])
+      .map(b => ({ id: b.id, x: b.x, y: b.y, area: b.area || 0, peak: b.peak || 0,
+                   luma: b.peak || 0, locked: true }));
+    this.last = this.blobs[0];
     this._at = performance.now();
     // Tracker and browser share a machine, so this is true end-to-end latency
     // from the moment the blob was found to the moment the page has it.
@@ -1145,6 +1160,11 @@ class PiTracker {
   }
 
   /* Same contract as IRTracker.detect(): a fix, or null. */
+  detectAll() {
+    if (!this.blobs || !this.blobs.length) return [];
+    if (performance.now() - this._at > this.staleMs) { this.blobs = []; this.last = null; return []; }
+    return this.blobs;
+  }
   detect() {
     if (!this.last) return null;
     // A dead feed must lift the pen rather than freezing the cursor where it
@@ -1154,13 +1174,20 @@ class PiTracker {
   }
 
   processFrame() {
-    const b = this.detect();
-    if (!b || !this.homography) return null;
-    const p = applyHomography(this.homography, b.x, b.y);
-    if (!p) return null;
-    const m = 0.15;
-    if (p.x < -m || p.x > 1 + m || p.y < -m || p.y > 1 + m) return null;
-    return { nx: p.x, ny: p.y, size: Math.sqrt(b.area || 1) / 320, mapped: true };
+    const all = this.processAll();
+    return all.length ? all[0] : null;
+  }
+  processAll() {
+    if (!this.homography) return [];
+    const m = 0.15, out = [];
+    for (const b of this.detectAll()) {
+      const p = applyHomography(this.homography, b.x, b.y);
+      if (!p) continue;
+      if (p.x < -m || p.x > 1 + m || p.y < -m || p.y > 1 + m) continue;
+      out.push({ id: b.id, nx: p.x, ny: p.y,
+                 size: Math.sqrt(b.area || 1) / 320, mapped: true });
+    }
+    return out;
   }
 }
 
@@ -1696,11 +1723,10 @@ class PaintApp {
       if (heavy || this._ovFullDirty) {
         this.octx.clearRect(0, 0, this.vw, this.vh);
         this._ovFullDirty = heavy;      // stays true until the last one is gone
-        this._ovRect = null;
-      } else if (this._ovRect) {
-        const r = this._ovRect;
-        this.octx.clearRect(r[0], r[1], r[2], r[3]);
-        this._ovRect = null;
+        this._ovRects = null;
+      } else if (this._ovRects && this._ovRects.length) {
+        for (const r of this._ovRects) this.octx.clearRect(r[0], r[1], r[2], r[3]);
+        this._ovRects = null;
       }
       this.runMasked(() => {
         this.theme.renderOverlay(now);
@@ -1713,25 +1739,34 @@ class PaintApp {
     requestAnimationFrame(() => this.loop());
   }
 
-  setCursor(x, y, visible) {
-    this.cursorVisible = !!visible;
+  setCursor(x, y, visible, key = 'main') {
+    if (!this.cursors) this.cursors = new Map();
+    if (visible) this.cursors.set(key, { x, y }); else this.cursors.delete(key);
+    // Kept for everything that still reads a single cursor.
+    this.cursorVisible = this.cursors.size > 0;
     if (visible) this.cursorPos = { x, y };
   }
   renderCursor() {
-    if (!this.cursorVisible || !this.cursorPos) return;
+    const list = this.cursors && this.cursors.size ? [...this.cursors.values()]
+               : (this.cursorVisible && this.cursorPos ? [this.cursorPos] : []);
+    if (!list.length) return;
     const ctx = this.octx;
     const r = 10 + 12 * this.sizeScale;
-    // Remember what this touched so the next frame can clear just that, instead
-    // of the whole layer. Padded for the 2 px stroke and rounded outwards.
+    // One rect per cursor, not a bounding box around them all: two people at
+    // opposite ends of the wall would union into the whole canvas and lose the
+    // dirty-rect optimisation entirely.
     const pad = r + 4;
-    this._ovRect = [Math.floor(this.cursorPos.x - pad), Math.floor(this.cursorPos.y - pad),
-                    Math.ceil(pad * 2), Math.ceil(pad * 2)];
+    this._ovRects = list.map(c => [Math.floor(c.x - pad), Math.floor(c.y - pad),
+                                   Math.ceil(pad * 2), Math.ceil(pad * 2)]);
+    for (const c of list) this.drawOneCursor(ctx, c.x, c.y, r);
+  }
+  drawOneCursor(ctx, x, y, r) {
     ctx.save();
-    ctx.beginPath(); ctx.arc(this.cursorPos.x, this.cursorPos.y, r + 1, 0, Math.PI * 2);
+    ctx.beginPath(); ctx.arc(x, y, r + 1, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 2; ctx.stroke();
-    ctx.beginPath(); ctx.arc(this.cursorPos.x, this.cursorPos.y, r, 0, Math.PI * 2);
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.lineWidth = 1.5; ctx.stroke();
-    ctx.beginPath(); ctx.arc(this.cursorPos.x, this.cursorPos.y, 1.5, 0, Math.PI * 2);
+    ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fill();
     ctx.restore();
   }
@@ -2024,8 +2059,13 @@ class PaintApp {
      Painting is suppressed over the bar, or you would spray the UI. */
   // The three can targets, in the order they sit along the bottom bar.
   canTargets() {
-    return [['color', 'gp-swatches'], ['mode', 'gp-mode-pill'], ['size', 'gp-size-pill']];
+    return [['color', 'gp-swatches'], ['mode', 'gp-mode-pill'],
+            ['size', 'gp-size-pill'], ['clear', 'gp-clear']];
   }
+  // Clear wipes the wall, so it wants a deliberate hold rather than the same
+  // dwell that opens a menu - and it must not fire again while you are still
+  // sitting on it.
+  canDwellFor(kind) { return kind === 'clear' ? 1800 : this.PICKER_ARM_MS; }
   canTargetAt(x, y) {
     const pad = 46;         // generous - the tracker jitters several px
     for (const [kind, id] of this.canTargets()) {
@@ -2291,6 +2331,13 @@ class PaintApp {
     });
     document.getElementById('gp-cam-calib-btn').addEventListener('click', () => this.beginCanCalibration());
   }
+  // Every tracker exposes one spot; only the Pi one can see two cans.
+  activeFrames() {
+    const t = this.activeTracker();
+    if (t.processAll) return t.processAll();
+    const r = t.processFrame();
+    return r ? [Object.assign({ id: 0 }, r)] : [];
+  }
   activeTracker() {
     return this.camMode === 'pi' ? this.piTracker
          : this.camMode === 'ir' ? this.irTracker
@@ -2461,7 +2508,7 @@ class PaintApp {
       if (!this.handTrackingOn ||
           !['can', 'ir', 'pi'].includes(this.camMode)) return;
       const tracker = this.activeTracker();
-      try { this.onCanFrame(tracker.processFrame()); } catch (e) { console.error('[tracking]', e); }
+      try { this.onCanFrames(this.activeFrames()); } catch (e) { console.error('[tracking]', e); }
       if (this.camMode === 'ir') {
         const el = document.getElementById('gp-ir-readout'), b = this.irTracker.last;
         if (el) el.textContent = b
@@ -2478,117 +2525,96 @@ class PaintApp {
     this._canRaf = requestAnimationFrame(step);
   }
 
-  onCanFrame(r) {
-    const key = 'can';
+  /* One stroke per can. Ids come from the tracker, which matches spots to the
+     previous frame by nearest neighbour; when two cans cross the ids swap,
+     which is invisible while both paint with the same brush. That is exactly
+     why same-brush multi-can is worth shipping and per-can colour is not.
+
+     Only the FIRST track drives the menus. Two people arming the colour picker
+     at once has no sensible meaning, and whoever is not driving should just
+     keep painting. Everyone is stopped from painting over the controls. */
+  onCanFrames(list) {
     const now = performance.now();
     const dt = this._canLastT ? now - this._canLastT : 0;
     this._canLastT = now;
-    if (!r) {
-      // debounce loss of tracking — a single dropped/blurry frame shouldn't lift the pen
-      this._canMiss = (this._canMiss || 0) + 1;
-      if (this._canMiss > 4) {
-        // Releasing the trigger is the commit: it is the only "click" the can
-        // has, so letting go of the button is how you choose a colour.
-        if (this._pickerOpen) this.closeCanPicker(true);
-        this._pickerDwell = 0; this._pickerTarget = null; this.armCanPicker(0, null);
+    if (!this._canState) this._canState = new Map();
+
+    const seen = new Set(list.map(r => r.id));
+    for (const [id, st] of [...this._canState]) {
+      if (seen.has(id)) continue;
+      // Debounced, as before: one dropped frame must not lift the pen.
+      st.miss = (st.miss || 0) + 1;
+      if (st.miss > 4) {
+        const key = 'can' + id;
         if (this.strokes.has(key)) this.pointerUp(key);
-        this._canEmaX = null; this._canEmaY = null;
-        this.setCursor(null, null, false);
+        this.setCursor(0, 0, false, key);
+        this._canState.delete(id);
+      }
+    }
+
+    if (!list.length) {
+      if (!this._canState.size) {
+        if (this._pickerOpen) this.closeCanPicker(true);   // release = commit
+        if (this._pickerDwell || this._canFired) {
+          this._pickerDwell = 0; this._pickerTarget = null; this._canFired = false;
+          this.armCanPicker(0, null);
+        }
       }
       return;
     }
-    this._canMiss = 0;
-    const rawX = (r.mapped ? r.nx : 1 - r.nx) * this.vw, rawY = r.ny * this.vh;
-    // Exponential smoothing on the cursor. Its cost is LATENCY, and the cost is
-    // paid in frames, not seconds: it needs about 5 frames to settle, so at 33
-    // fps that is ~150 ms of lag and at 10 fps it was half a second. 0.45 was
-    // chosen when the tracker was noisy and barely above its threshold. It now
-    // delivers a position stable to +/-0.005 with 4.6x margin, so most of that
-    // filtering is no longer being paid for anything. Tune live from the
-    // console with app.canEmaAlpha = 0.9 (1.0 = no smoothing at all).
-    const alpha = this.canEmaAlpha;
-    this._canEmaX = this._canEmaX == null ? rawX : this._canEmaX + (rawX - this._canEmaX) * alpha;
-    this._canEmaY = this._canEmaY == null ? rawY : this._canEmaY + (rawY - this._canEmaY) * alpha;
-    const x = this._canEmaX, y = this._canEmaY;
-    this.setCursor(x, y, true);
 
-    if (this._pickerOpen) { this.updateCanPicker(x, y); return; }
+    let primary = null;
+    for (const r of list) {
+      const key = 'can' + r.id;
+      let st = this._canState.get(r.id);
+      if (!st) { st = { ema: null, miss: 0 }; this._canState.set(r.id, st); }
+      st.miss = 0;
 
-    const target = this.canTargetAt(x, y);
+      const rawX = (r.mapped ? r.nx : 1 - r.nx) * this.vw, rawY = r.ny * this.vh;
+      const a = this.canEmaAlpha;
+      st.ema = st.ema ? { x: st.ema.x + (rawX - st.ema.x) * a,
+                          y: st.ema.y + (rawY - st.ema.y) * a }
+                      : { x: rawX, y: rawY };
+      const x = st.ema.x, y = st.ema.y;
+      this.setCursor(x, y, true, key);
+
+      const overControl = this.canTargetAt(x, y);
+      if (this._pickerOpen || overControl) {
+        if (this.strokes.has(key)) this.pointerUp(key);
+      } else if (!this.strokes.has(key)) this.pointerDown(key, x, y);
+      else this.pointerMove(key, x, y);
+
+      if (!primary) primary = { x, y, target: overControl };
+    }
+
+    if (this._pickerOpen) { this.updateCanPicker(primary.x, primary.y); return; }
+
+    const target = primary.target;
     if (target) {
-      // Never paint over the controls - you would spray them trying to reach
-      // them - and lift any stroke that wandered in.
-      if (this.strokes.has(key)) this.pointerUp(key);
-      if (target.kind !== this._pickerTarget) { this._pickerTarget = target.kind; this._pickerDwell = 0; }
+      if (target.kind !== this._pickerTarget) {
+        this._pickerTarget = target.kind; this._pickerDwell = 0; this._canFired = false;
+      }
       this._pickerDwell += dt;
-      this.armCanPicker(this._pickerDwell / this.PICKER_ARM_MS, target.el);
-      if (this._pickerDwell >= this.PICKER_ARM_MS) this.openCanPicker(target.kind);
+      const need = this.canDwellFor(target.kind);
+      this.armCanPicker(this._pickerDwell / need, target.el);
+      if (this._pickerDwell >= need && !this._canFired) {
+        this._canFired = true;                      // leave and return to repeat
+        if (target.kind === 'clear') {
+          this.clearCanvas();
+          this.armCanPicker(0, null);
+          this.setCamStatus('Wall cleared.');
+          setTimeout(() => this.setCamStatus(''), 1500);
+        } else {
+          this.openCanPicker(target.kind);
+        }
+      }
       return;
     }
-    if (this._pickerDwell) { this._pickerDwell = 0; this._pickerTarget = null; this.armCanPicker(0, null); }
-
-    if (!this.strokes.has(key)) this.pointerDown(key, x, y);
-    else this.pointerMove(key, x, y);
-  }
-
-  async populateCameraList() {
-    const sel = document.getElementById('gp-cam-device');
-    let devices = [];
-    try { devices = await navigator.mediaDevices.enumerateDevices(); } catch (e) { return; }
-    const cams = devices.filter(d => d.kind === 'videoinput');
-    if (!cams.length) return;
-    const current = sel.value;
-    sel.innerHTML = '';
-    cams.forEach((d, i) => {
-      const o = document.createElement('option');
-      o.value = d.deviceId;
-      o.textContent = d.label || ('Camera ' + (i + 1));
-      sel.appendChild(o);
-    });
-    // Prefer the external USB camera - the built-in FaceTime one has its IR
-    // cut filter still in it and will see nothing.
-    const external = cams.find(d => /usb|c910|logitech/i.test(d.label || ''));
-    sel.value = current || (external ? external.deviceId : cams[0].deviceId);
-  }
-
-  async startIRCamera() {
-    this.setCamSub('starting…');
-    this.setCamStatus('');
-    try {
-      if (this._camStream) { this._camStream.getTracks().forEach(t => t.stop()); this._camStream = null; }
-      const chosen = document.getElementById('gp-cam-device').value;
-      const constraints = { video: { width: { ideal: 1280 }, height: { ideal: 720 } } };
-      if (chosen) constraints.video.deviceId = { exact: chosen };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      this._camStream = stream;
-      const video = document.getElementById('gp-video');
-      video.srcObject = stream;
-      await video.play().catch(() => {});
-      await this.populateCameraList();
-      this.startPreviewPump();
-      this._camStarting = false;
-      this.irTracker.reset();
-      this.showCamStartCTA(false);
-      this.setCamModeButtonsEnabled(true);
-      const track = stream.getVideoTracks()[0];
-      const st = track ? track.getSettings() : {};
-      this.setCamStatus(`Live at ${st.width || '?'}x${st.height || '?'}. Now tap "Calibrate 4 corners".`);
-    } catch (e) {
-      this._camStarting = false;
-      this.setCamModeButtonsEnabled(true);
-      const blocked = this.cameraAllowed() === false;
-      this.setCamStatus(blocked ? 'Camera blocked in this context — open the file in its own browser tab.'
-                                : 'Camera permission denied — allow the webcam and tap again.');
-      this.setCamSub(blocked ? 'open in a browser tab' : 'permission denied — tap to retry');
+    if (this._pickerDwell || this._canFired) {
+      this._pickerDwell = 0; this._pickerTarget = null; this._canFired = false;
+      this.armCanPicker(0, null);
     }
   }
-
-  // 4-point calibration: the user walks to each corner of the physical wall in turn, holds the IR
-  // marker there, and taps Capture — this maps camera-space to canvas-space via a homography, so an
-  // off-axis or angled camera still works (unlike the single centered box used for spray-can mode).
-
-
-
 
   toggleIRDiagnostics() {
     if (this._irDiagRaf) {

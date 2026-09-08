@@ -48,25 +48,25 @@ class IRTracker:
 
     def __init__(self, k=10.0, floor=20, min_luma=55, bg_rate=0.02,
                  max_area_frac=0.01, min_area=24, lock_need=3,
-                 lock_dist_frac=0.05):
+                 lock_dist_frac=0.05, max_blobs=2):
         self.k = k
         self.floor = floor
         self.min_luma = min_luma
         self.bg_rate = bg_rate
         self.max_area_frac = max_area_frac
         self.min_area = min_area
+        self.max_blobs = max_blobs
         self.lock_need = lock_need
         self.lock_dist_frac = lock_dist_frac
         self.bg = None
-        self._streak = 0
-        self._last = None
+        self._tracks = []
+        self._next_id = 0
         self.stats = {}
         self._buf = None          # preallocated scratch; see detect()
 
     def reset(self):
         self.bg = None
-        self._streak = 0
-        self._last = None
+        self._tracks = []
 
     def detect(self, gray):
         """gray: 2-D uint8. Returns a dict or None.
@@ -88,7 +88,7 @@ class IRTracker:
 
         if self.bg is None:
             self.bg = f.copy()
-            return None
+            return []
 
         np.subtract(f, self.bg, out=sig)
         np.maximum(sig, 0, out=sig)
@@ -116,47 +116,75 @@ class IRTracker:
             tmp *= (sig < thr)    # mask as 0/1 multiply, not fancy indexing
             self.bg += tmp
 
-        if peak < thr or luma < self.min_luma:
-            self._streak = 0
-            self._last = None
-            return None
-
-        # Intensity-weighted centroid of the bright pixels around the peak.
+        # ---- find up to max_blobs spots, brightest first -------------------
+        # Two people, two cans. Each spot is taken, then blanked out of the
+        # signal so the next pass finds the next one rather than the same peak
+        # again. Everything a single blob had to satisfy - threshold, min_luma,
+        # min_area, max_area - each of these still does.
         r = max(12, w // 14)
-        y0, y1 = max(0, py - r), min(h, py + r)
-        x0, x1 = max(0, px - r), min(w, px + r)
-        win = sig[y0:y1, x0:x1]
-        mask = win >= thr
-        area = int(mask.sum())
-        # A real LED lights a PATCH; sensor noise is a pixel or two. Measured on
-        # this rig: the LED gives ~1000 px at painting distance and ~4300 close
-        # up, while the false positives that were painting by themselves were
-        # area 2. Discriminating on size costs nothing - no latency like
-        # lock_need, no range like min_luma - because the gap is three orders
-        # of magnitude. Even at 4-5 m the spot stays far above this.
-        if area < self.min_area or area > self.max_area_frac * n:
-            self._streak = 0
-            self._last = None
-            return None
+        found = []
+        for _ in range(self.max_blobs):
+            peak_idx = int(np.argmax(sig))
+            peak = float(sig.flat[peak_idx])
+            if peak < thr:
+                break
+            py, px = divmod(peak_idx, w)
+            luma = int(gray.flat[peak_idx])
 
-        wsum = float(win[mask].sum())
-        ys, xs = np.nonzero(mask)
-        cx = x0 + float((xs * win[ys, xs]).sum()) / wsum
-        cy = y0 + float((ys * win[ys, xs]).sum()) / wsum
+            y0, y1 = max(0, py - r), min(h, py + r)
+            x0, x1 = max(0, px - r), min(w, px + r)
+            win = sig[y0:y1, x0:x1]
+            mask = win >= thr
+            area = int(mask.sum())
+            ok = (luma >= self.min_luma and self.min_area <= area <= self.max_area_frac * n)
+            if ok:
+                wsum = float(win[mask].sum())
+                ys, xs = np.nonzero(mask)
+                found.append({
+                    "cx": x0 + float((xs * win[ys, xs]).sum()) / wsum,
+                    "cy": y0 + float((ys * win[ys, xs]).sum()) / wsum,
+                    "area": area, "peak": round(peak), "luma": luma})
+            # Blank this peak's window either way: if it failed the gates it is
+            # noise or a reflection, and leaving it in would make the next pass
+            # pick the very same pixel forever.
+            win[mask] = 0.0
+            if not ok and peak >= thr:
+                sig[max(0, py - 2):py + 3, max(0, px - 2):px + 3] = 0.0
 
-        # Persistence gate. Noise is spatially random frame to frame; a held LED
-        # is not. This replaces an absolute brightness gate, which cost range
-        # badly - at distance the dot is dim, not bright.
-        near = (self._last is not None and
-                np.hypot(cx - self._last[0], cy - self._last[1])
-                < self.lock_dist_frac * w)
-        self._streak = self._streak + 1 if near else 1
-        self._last = (cx, cy)
+        # ---- match them to last frame's tracks -----------------------------
+        # Greedy nearest neighbour. With two blobs that is all it needs to be,
+        # and identities only have to survive between frames, not across the
+        # whole stroke. When two cans CROSS, the ids swap - invisible while both
+        # paint with the same brush, which is exactly why that is the feature
+        # worth shipping first.
+        limit = self.lock_dist_frac * w
+        unused = list(range(len(found)))
+        alive = []
+        for tr in self._tracks:
+            best, bestd = None, limit
+            for i in unused:
+                d = np.hypot(found[i]["cx"] - tr["x"], found[i]["cy"] - tr["y"])
+                if d < bestd:
+                    best, bestd = i, d
+            if best is None:
+                continue                      # track lost; it simply ends
+            b = found[best]
+            unused.remove(best)
+            tr.update(x=b["cx"], y=b["cy"], area=b["area"], peak=b["peak"],
+                      luma=b["luma"], streak=tr["streak"] + 1)
+            alive.append(tr)
+        for i in unused:                      # anything left is a new spot
+            b = found[i]
+            self._next_id += 1
+            alive.append({"id": self._next_id, "x": b["cx"], "y": b["cy"],
+                          "area": b["area"], "peak": b["peak"], "luma": b["luma"],
+                          "streak": 1})
+        self._tracks = alive
 
-        return {"x": cx / w, "y": cy / h, "area": area,
-                "peak": round(peak), "luma": luma,
-                "locked": self._streak >= self.lock_need}
-
+        return [{"id": t["id"], "x": t["x"] / w, "y": t["y"] / h,
+                 "area": t["area"], "peak": t["peak"], "luma": t["luma"],
+                 "locked": t["streak"] >= self.lock_need}
+                for t in self._tracks]
 
 # --------------------------------------------------------------------- source
 class PiCamera:
@@ -410,6 +438,8 @@ def parse_args():
     # reject single-frame false positives, which mattered when the signal sat
     # barely above threshold. With a 4.6x margin and a position stable to
     # +/-0.005, 2 is plenty and 1 is worth trying.
+    p.add_argument("--max-blobs", type=int, default=2,
+                   help="how many spots to track at once - one per can")
     p.add_argument("--min-area", type=int, default=24,
                    help="smallest blob in pixels. Rejects single-pixel noise, "
                         "which is what paints by itself at low --lock-need")
@@ -452,13 +482,15 @@ def _encode_preview(boost=True, width=640):
         # its lens covered look identical - both are a black rectangle.
         img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX)
     vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    if blob:
-        cx = int(blob["x"] * vis.shape[1])
-        cy = int(blob["y"] * vis.shape[0])
-        colour = (0, 255, 0) if blob["locked"] else (0, 165, 255)
+    for b in (blob or []):
+        cx = int(b["x"] * vis.shape[1])
+        cy = int(b["y"] * vis.shape[0])
+        colour = (0, 255, 0) if b["locked"] else (0, 165, 255)
         cv2.circle(vis, (cx, cy), 18, colour, 2)
         cv2.line(vis, (cx - 26, cy), (cx + 26, cy), colour, 1)
         cv2.line(vis, (cx, cy - 26), (cx, cy + 26), colour, 1)
+        cv2.putText(vis, str(b["id"]), (cx + 22, cy - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1, cv2.LINE_AA)
     label = (f"raw {lo}-{hi}  luma {stats.get('max_luma', 0)}  "
              f"sig {stats.get('max_sig', 0):.1f}  thr {stats.get('thr', 0):.1f}  "
              + ("LOCKED" if blob and blob.get("locked")
@@ -553,7 +585,8 @@ async def run(args):
         kw.update(device=args.device, exposure_us=exposure, gain=gain)
     cam = Source(args.width, args.height, **kw)
     tracker = IRTracker(k=args.k, floor=args.floor, min_luma=args.min_luma,
-                        min_area=args.min_area, lock_need=args.lock_need)
+                        min_area=args.min_area, lock_need=args.lock_need,
+                        max_blobs=args.max_blobs)
     clients = set()
 
     async def handler(ws):
@@ -572,15 +605,16 @@ async def run(args):
         send_interval = 1.0 / args.send_rate if args.send_rate else 0.0
         while True:
             gray = await loop.run_in_executor(None, cam.read)
-            blob = tracker.detect(gray)
+            blobs = tracker.detect(gray)
+            locked = [b for b in blobs if b["locked"]]
             frames += 1
             if args.serve:
                 with LATEST_LOCK:
-                    LATEST["gray"], LATEST["blob"] = gray, blob
+                    LATEST["gray"], LATEST["blob"] = gray, blobs
                     LATEST["stats"] = tracker.stats
 
             now = time.time()
-            fix = bool(blob and blob["locked"])
+            fix = bool(locked)
             # Send on a fixed cadence, but never swallow a change of state:
             # dropping the transition to "lost" would leave the pen down.
             if clients and (now - last_send >= send_interval or fix != was_fix):
@@ -588,10 +622,17 @@ async def run(args):
                 # so subtracting it from Date.now() there measures the real
                 # end-to-end path - capture, detect, socket - with no clock skew
                 # to argue about.
-                msg = json.dumps({"lost": True, "t": round(now * 1000)} if not fix
-                                 else {"x": round(blob["x"], 5), "y": round(blob["y"], 5),
-                                       "area": blob["area"], "peak": blob["peak"],
-                                       "t": round(now * 1000)})
+                # x/y stay at the top level as the first spot, so anything
+                # written against the single-blob protocol - debug-pointer, the
+                # measure tool - keeps working unchanged.
+                if not fix:
+                    msg = json.dumps({"lost": True, "blobs": [], "t": round(now * 1000)})
+                else:
+                    bs = [{"id": b["id"], "x": round(b["x"], 5), "y": round(b["y"], 5),
+                           "area": b["area"], "peak": b["peak"]} for b in locked]
+                    msg = json.dumps({"x": bs[0]["x"], "y": bs[0]["y"],
+                                      "area": bs[0]["area"], "peak": bs[0]["peak"],
+                                      "blobs": bs, "t": round(now * 1000)})
                 await asyncio.gather(*(c.send(msg) for c in list(clients)),
                                      return_exceptions=True)
                 last_send, was_fix = now, fix
@@ -599,9 +640,12 @@ async def run(args):
             if args.stats and now - last_print > 0.25:
                 s = tracker.stats
                 fps = frames / max(1e-6, now - t0)
-                where = (f"{blob['x']:.3f},{blob['y']:.3f} area {blob['area']:4d} "
-                         f"peak {blob['peak']:3.0f} {'LOCKED' if blob['locked'] else '...'}"
-                         if blob else "no detection")
+                if blobs:
+                    where = "  ".join(
+                        f"#{b['id']} {b['x']:.3f},{b['y']:.3f} a{b['area']:4d} "
+                        f"{'LOCK' if b['locked'] else '...'}" for b in blobs)
+                else:
+                    where = "no detection"
                 print(f"\r{fps:5.1f} fps  luma {s.get('max_luma',0):3d}  "
                       f"sig {s.get('max_sig',0):5.1f}  thr {s.get('thr',0):5.1f}  "
                       f"{where}        ", end="", flush=True)
