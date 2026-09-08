@@ -535,9 +535,14 @@ async def run(args):
             # Send on a fixed cadence, but never swallow a change of state:
             # dropping the transition to "lost" would leave the pen down.
             if clients and (now - last_send >= send_interval or fix != was_fix):
-                msg = json.dumps({"lost": True} if not fix
+                # t: wall-clock ms at send. The browser runs on this same Pi,
+                # so subtracting it from Date.now() there measures the real
+                # end-to-end path - capture, detect, socket - with no clock skew
+                # to argue about.
+                msg = json.dumps({"lost": True, "t": round(now * 1000)} if not fix
                                  else {"x": round(blob["x"], 5), "y": round(blob["y"], 5),
-                                       "area": blob["area"], "peak": blob["peak"]})
+                                       "area": blob["area"], "peak": blob["peak"],
+                                       "t": round(now * 1000)})
                 await asyncio.gather(*(c.send(msg) for c in list(clients)),
                                      return_exceptions=True)
                 last_send, was_fix = now, fix

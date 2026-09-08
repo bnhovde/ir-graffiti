@@ -892,6 +892,9 @@ class PiTracker {
     this.last = { x: m.x, y: m.y, area: m.area || 0, peak: m.peak || 0,
                   luma: m.peak || 0, locked: true };
     this._at = performance.now();
+    // Tracker and browser share a machine, so this is true end-to-end latency
+    // from the moment the blob was found to the moment the page has it.
+    if (m.t) this.latency = Date.now() - m.t;
   }
 
   /* Same contract as IRTracker.detect(): a fix, or null. */
