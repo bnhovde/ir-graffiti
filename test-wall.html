@@ -2036,8 +2036,10 @@ class PaintApp {
       Math.abs(b - this.sizeScale) < Math.abs(a - this.sizeScale) ? b : a);
   }
   refreshCanPills() {
+    // wireUI runs before setTheme, so there may be no theme yet; setTheme calls
+    // this again once there is.
     const lbl = document.getElementById('gp-mode-pill-label');
-    if (lbl) lbl.textContent = this.theme.label;
+    if (lbl && this.theme) lbl.textContent = this.theme.label;
     const dot = document.getElementById('gp-size-dot');
     if (dot) {
       const d = Math.round(8 + this.sizeScale * 12);
