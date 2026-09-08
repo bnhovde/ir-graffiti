@@ -47,12 +47,14 @@ class IRTracker:
     """
 
     def __init__(self, k=10.0, floor=20, min_luma=55, bg_rate=0.02,
-                 max_area_frac=0.01, lock_need=3, lock_dist_frac=0.05):
+                 max_area_frac=0.01, min_area=24, lock_need=3,
+                 lock_dist_frac=0.05):
         self.k = k
         self.floor = floor
         self.min_luma = min_luma
         self.bg_rate = bg_rate
         self.max_area_frac = max_area_frac
+        self.min_area = min_area
         self.lock_need = lock_need
         self.lock_dist_frac = lock_dist_frac
         self.bg = None
@@ -126,7 +128,13 @@ class IRTracker:
         win = sig[y0:y1, x0:x1]
         mask = win >= thr
         area = int(mask.sum())
-        if area == 0 or area > self.max_area_frac * n:
+        # A real LED lights a PATCH; sensor noise is a pixel or two. Measured on
+        # this rig: the LED gives ~1000 px at painting distance and ~4300 close
+        # up, while the false positives that were painting by themselves were
+        # area 2. Discriminating on size costs nothing - no latency like
+        # lock_need, no range like min_luma - because the gap is three orders
+        # of magnitude. Even at 4-5 m the spot stays far above this.
+        if area < self.min_area or area > self.max_area_frac * n:
             self._streak = 0
             self._last = None
             return None
@@ -402,6 +410,9 @@ def parse_args():
     # reject single-frame false positives, which mattered when the signal sat
     # barely above threshold. With a 4.6x margin and a position stable to
     # +/-0.005, 2 is plenty and 1 is worth trying.
+    p.add_argument("--min-area", type=int, default=24,
+                   help="smallest blob in pixels. Rejects single-pixel noise, "
+                        "which is what paints by itself at low --lock-need")
     p.add_argument("--lock-need", type=int, default=2,
                    help="frames before a fix is reported. Each one costs 33 ms "
                         "of latency between pressing the button and painting")
@@ -542,7 +553,7 @@ async def run(args):
         kw.update(device=args.device, exposure_us=exposure, gain=gain)
     cam = Source(args.width, args.height, **kw)
     tracker = IRTracker(k=args.k, floor=args.floor, min_luma=args.min_luma,
-                        lock_need=args.lock_need)
+                        min_area=args.min_area, lock_need=args.lock_need)
     clients = set()
 
     async def handler(ws):
