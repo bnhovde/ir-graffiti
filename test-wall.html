@@ -2269,6 +2269,82 @@ class PaintApp {
 
 
 
+  toggleIRDiagnostics() {
+    if (this._irDiagRaf) {
+      cancelAnimationFrame(this._irDiagRaf); this._irDiagRaf = null;
+      if (this._irDiagEl) { this._irDiagEl.remove(); this._irDiagEl = null; }
+      return;
+    }
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;left:16px;top:16px;z-index:9998;background:rgba(10,10,12,0.92);' +
+      'border:1px solid rgba(255,255,255,0.18);border-radius:10px;padding:10px;color:#fff;';
+    el.innerHTML =
+      '<canvas id="irdiag-c" width="400" height="225" style="display:block;border-radius:6px;background:#000;"></canvas>' +
+      '<div id="irdiag-t" style="font:11.5px/1.6 ui-monospace,monospace;margin-top:8px;white-space:pre;"></div>';
+    document.body.appendChild(el);
+    this._irDiagEl = el;
+    const c = el.querySelector('#irdiag-c').getContext('2d');
+    const t = el.querySelector('#irdiag-t');
+
+    const step = () => {
+      const tr = this.irTracker;
+      const b = tr.detect();
+      const st = tr.stats || {};
+      const w = tr.work;
+      if (w && w.width) {
+        c.drawImage(w, 0, 0, 400, 225);
+        const sx = 400 / tr.W, sy = 225 / tr.H;
+        if (st.lx !== undefined) {                      // brightest pixel, ungated
+          c.strokeStyle = '#ff4444'; c.lineWidth = 1.5;
+          c.beginPath();
+          c.moveTo(st.lx * sx - 9, st.ly * sy); c.lineTo(st.lx * sx + 9, st.ly * sy);
+          c.moveTo(st.lx * sx, st.ly * sy - 9); c.lineTo(st.lx * sx, st.ly * sy + 9);
+          c.stroke();
+        }
+        if (b) {                                        // accepted blob
+          c.strokeStyle = b.locked ? '#5cff9d' : '#ffd24a'; c.lineWidth = 2;
+          c.beginPath(); c.arc(b.x * sx, b.y * sy, 13, 0, 7); c.stroke();
+        }
+      }
+      const track = this._camStream && this._camStream.getVideoTracks()[0];
+      const vs = track ? track.getSettings() : {};
+      const v = tr.video;
+      t.textContent =
+        `camera  ${(track && track.label ? track.label : 'none').slice(0, 34)}\n` +
+        `stream  ${vs.width || '?'}x${vs.height || '?'}   video ${v ? v.videoWidth : 0}x${v ? v.videoHeight : 0}\n` +
+        `work    ${tr.W}x${tr.H}   k=${tr.k}\n` +
+        `maxLuma ${st.maxLuma ?? '-'} at ${st.lx ?? '-'},${st.ly ?? '-'}   (red cross)\n` +
+        `maxSig  ${st.maxSig ?? '-'}  mean ${st.mean ?? '-'}  sd ${st.sd ?? '-'}  thr ${st.thr ?? '-'}\n` +
+        `gates   floor ${tr.floor}  minLuma ${tr.minLuma}  maxArea ${Math.round(tr.maxAreaFrac * tr.W * tr.H)}\n` +
+        (b ? `BLOB    area ${b.area} peak +${b.peak} luma ${b.luma} ${b.locked ? 'LOCKED' : 'settling'}`
+           : `BLOB    none`);
+      this._irDiagRaf = requestAnimationFrame(step);
+    };
+    this._irDiagRaf = requestAnimationFrame(step);
+  }
+
+  startPreviewPump() {
+    if (this._previewRaf) return;
+    const canvas = document.getElementById('gp-cam-preview');
+    const ctx = canvas.getContext('2d');
+    const video = document.getElementById('gp-video');
+    const step = () => {
+      if (!this._camStream) { this._previewRaf = null; return; }
+      if (video.videoWidth) {
+        if (canvas.width !== 320) { canvas.width = 320; canvas.height = 240; }
+        ctx.drawImage(video, 0, 0, 320, 240);
+      }
+      this._previewRaf = requestAnimationFrame(step);
+    };
+    this._previewRaf = requestAnimationFrame(step);
+  }
+
+  endIRCalibration() {
+    if (this._irCalRaf) { cancelAnimationFrame(this._irCalRaf); this._irCalRaf = null; }
+    if (this._irCalEl) { this._irCalEl.remove(); this._irCalEl = null; }
+    this._irCalibrating = false;
+  }
+
   beginIRCalibration() {
     if (this._irCalibrating) return;
     const tracker = this.activeTracker();
@@ -2408,17 +2484,9 @@ class PaintApp {
         }
         place();
       }
-      return;
-    }
-    this._canMiss = 0;
-    const rawX = (1 - r.nx) * this.vw, rawY = r.ny * this.vh;
-    const alpha = 0.45; // smoothing: lower = smoother but more lag, higher = more responsive but jittery
-    this._canEmaX = this._canEmaX == null ? rawX : this._canEmaX + (rawX - this._canEmaX) * alpha;
-    this._canEmaY = this._canEmaY == null ? rawY : this._canEmaY + (rawY - this._canEmaY) * alpha;
-    const x = this._canEmaX, y = this._canEmaY;
-    this.setCursor(x, y, true);
-    if (!this.strokes.has(key)) this.pointerDown(key, x, y);
-    else this.pointerMove(key, x, y);
+      this._irCalRaf = requestAnimationFrame(step);
+    };
+    this._irCalRaf = requestAnimationFrame(step);
   }
 
   stopCamera() {
