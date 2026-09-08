@@ -1,22 +1,32 @@
 # IR Graffiti — spray can tracker
 
 A handheld spray can emits infrared; a camera watches for it and paints where it
-points. The can works. The camera is the problem — and specifically, the fact
-that macOS will not let us set its exposure.
+points.
 
-**Status:** the concept is sound and partly proven. Direct-view tracking works at
-3 m today with unoptimised parts. Two things block progress: the LED's narrow
-beam means the can must be aimed at the camera rather than painted with, and the
-webcam offers no manual exposure control, which is the single most important
-setting for rejecting ambient light. Both are fixed by buying different parts,
-not by more software.
+**Status:** the whole chain runs end to end — can, camera, tracker, wall app — on
+a Raspberry Pi 5 driving a TV. Two of the three original blockers are closed.
+Manual exposure, the setting macOS refused, works on Linux: at 2 ms a lit room
+reads luma 5, essentially black, and only the LED survives. What remains is the
+**beam angle**: the can still has to be pointed at the camera rather than painted
+with, and that is now understood to be the LED, not the camera or the software.
+
+The parts to fix it are in hand but **not yet tested** — a single 850 nm emitter
+with a 120° beam replacing the pair of 940 nm indicators, a mono global-shutter
+camera, and a matching bandpass filter. The can has been remodelled around the
+new emitter. Nothing below marked "incoming" has been proven.
 
 ## Try it
 
 **▶ [bnhovde.github.io/ir-graffiti/test-wall.html](https://bnhovde.github.io/ir-graffiti/test-wall.html)**
 
-Served from GitHub Pages off `main`, so it updates on every push. Camera panel →
-**IR can** → pick the camera → **Diagnostics** → **Calibrate 4 corners**.
+Served from GitHub Pages off `main`, so it updates on every push.
+
+- **Camera on the same machine:** camera panel → **IR can** → pick the camera →
+  **Diagnostics** → **Calibrate 4 corners**.
+- **Tracking on a Pi:** camera panel → **IR (Pi)** → **Connect** (it prefills
+  `ws://<host>:8765`) → **Calibrate 4 corners**. The browser never sees pixels in
+  this mode, only coordinates, so the diagnostics overlay has nothing to draw —
+  use the tracker's own `/preview` instead.
 
 Mouse and touch work without any of the hardware, if you just want to see the
 wall itself.
@@ -36,12 +46,12 @@ which `localhost` and HTTPS satisfy and a local file does not.
 ## The can
 
 Five printed parts, modelled parametrically in [`canv2.scad`](canv2.scad). All
-print without supports. About 160 mm tall, 60 mm diameter.
+print without supports. About 165 mm tall, 60 mm diameter.
 
 | Part | Key dimensions | Notes |
 |---|---|---|
 | `body` | ⌀60 × 145 | 2 mm wall, 15 mm shoulder cone, 18 mm neck with a snap bead. Prints upright, open end down. |
-| `cap_body` | ⌀36 × 22.6 | Internal shelf carries the button plate so press force goes into the can, not the plate. Nozzle spout stands 4 mm proud with two ⌀3.2 LED channels. |
+| `cap_body` | ⌀36 × 26.3 | Internal shelf carries the button plate so press force goes into the can, not the plate. Nozzle spout ⌀17.5, standing 4 mm proud, with a ⌀8.2 bore for the power emitter. |
 | `cap_top` | ⌀36, 4.1 plug | Snaps on via a split collet. Pry slot at the seam opposite the nozzle. |
 | `button_disc` | ⌀31.7 × 2.5 | Holds the switch. Pin holes on a 12.5 × 4.5 grid. |
 | `bottom_cap` | ⌀60 × 65.5 | Snap-in base with a slide-in cradle for the battery holder. Two pry slots at 0° and 180°. |
@@ -49,8 +59,32 @@ print without supports. About 160 mm tall, 60 mm diameter.
 Set `part=` to export one part, or leave it at `"all"` for the layout view.
 Exported STLs are in [`stl/`](stl). Everything derives from the parameter block
 at the top; the numbers worth knowing are `fit` (0.30, raise it if parts bind),
-`led_body_d` (3.0 — set 5.0 for 5 mm LEDs and the wiring chamber and nozzle
-resize themselves), and `hold_w` (36.20, cut for the CM battery holder).
+`hold_w` (36.20, cut for the CM battery holder), and the LED block below.
+
+### How the emitter mounts
+
+The nozzle holds the LED in a ⌀8.2 bore that runs out to the face, and **the
+tabs are the retention** — they span 14.5 mm and cannot pass a ⌀8.2 hole, so they
+bear on the ring behind it. Nothing sits in front of the dome, which is the whole
+point: the full 120° gets out.
+
+| Parameter | Value | Why |
+|---|---|---|
+| `pled_ring` | 0.8 | The forward-facing wall — just a stop for the tabs, so as thin as the printer holds. Two perimeters at a 0.4 nozzle |
+| `pled_tab_span` | 14.5 | Full, untrimmed. This sizes the spout, not the body |
+| `pled_tab_stag` | 1.5 | The tabs are **staggered, not opposite**. Slot is `tab_w + this`, centred, so the part goes in either way up. Read off a drawing — measure yours |
+| `pled_body_h` | 2.4 | Reporting only; does not touch the geometry, so an uncertain measurement cannot move the model |
+
+Assembly is drop-in: solder the leads first, drop the LED into the wiring chamber
+from above, push it forward until the tabs stop. `cap_body` prints rim up with no
+support — the drop-in channel removes what would have been the bore's ceiling.
+
+The model echoes its own key numbers on render, which is worth reading:
+
+```
+LED: body 1.6 proud, dome tip 4.2 proud of the face; front ring 0.8 thick;
+tab slot 3.3 tall x 14.9 wide, bearing at y=21.2 on 4.65 of ring; spout 17.5
+```
 
 **Print orientation:** `body` upright open end down · `cap_body` rim up ·
 `cap_top` **upside down**, roof on the bed · `button_disc` flat ·
@@ -64,41 +98,44 @@ level.
 
 | Item | Spec | Notes |
 |---|---|---|
-| IR LEDs | 2 × ⌀3 mm, 940 nm | [Fibel 940 nm emitter/receiver pair](https://www.fibel.no/product/940nm-sender-og-mottaker-ir-leder/) — the clear one is the emitter, the black one is a photodiode we don't use. No published datasheet, so beam angle and current rating are unknown. **940 nm is the worst case for a silicon sensor;** 850 nm is worth 2–3× for no other change. |
-| Resistors | 100 Ω each | One per LED. Gives ~17 mA per LED — already the continuous rating of a 3 mm part, so the LEDs are the ceiling, not the resistor. Dropping to 47 Ω buys roughly 2× and runs them over spec. |
+| IR LED *(incoming)* | 1 × 8 mm star emitter, **850 nm, 120°**, 3 W rated | Body ⌀8.0 (7.2 across the flats), dome ⌀6.0 × 2.6 tall, thermal slug ⌀6.2, tabs 1.5 × 1.05 spanning 14.5, marked IR+ / IR−. Vf 1.4–1.7 V at 500 mA — **single die, so it runs on 3 V**. Some parts sold as "3 W" are three dies in series at 4.5–5 V and will not light at all here; check before wiring. |
+| Resistor | **22 Ω**, 0.25 W | One, in series. Gives ~70 mA — 4× the old drive with plenty of margin. 15 Ω takes it to ~110 mA if you want more range. **Do not drive it at the rated 500 mA:** that is 0.75 W with no heatsink, in a plastic cap, and 2×AAA sag badly at that current. At 70 mA the LED dissipates ~0.1 W and heat is a non-issue. |
 | Switch | 12 × 12 mm tactile | 4-leg. See wiring warning below. |
 | Battery | 2 × AAA, 3.0 V | Printed holder `AAA_holder_di_CM.stl` from [`AAA_holder.3mf`](AAA_holder.3mf), 36.2 × 56.5 × 12 mm, slides into the base cradle. |
-| Camera | Logitech C910 | Modified — see below. |
+| Camera | Logitech C910, or OV9281 *(incoming)* | See below. |
+| Host | Raspberry Pi 5 | Runs the tracker and the browser. **Needs the 27 W supply** — see findings. |
+
+**Superseded:** 2 × ⌀3 mm 940 nm ([Fibel](https://www.fibel.no/product/940nm-sender-og-mottaker-ir-leder/)) at 17 mA through 100 Ω each. Kept here only so the old wiring is recognisable. 940 nm is the worst case for a silicon sensor and the ~±20° beam is what the whole rebuild is about.
 
 ---
 
 ## Wiring
 
-Two independent branches off one switch. Pressing the button lights both LEDs,
-and that *is* the trigger signal — the tracker treats "LED visible" as pen-down,
-so the button needs no telemetry of its own.
+One branch, one LED. Pressing the button lights it, and that *is* the trigger
+signal — the tracker treats "LED visible" as pen-down, so the button needs no
+telemetry of its own.
 
 ```mermaid
 graph LR
     BAT["Battery +<br/>2 x AAA, 3.0 V"]
-    SW["Tactile switch<br/>12 x 12 mm"]
-    R1["100 ohm"]
-    R2["100 ohm"]
-    D1["IR LED 1<br/>940 nm"]
-    D2["IR LED 2<br/>940 nm"]
+    SW["Tactile switch<br/>12 x 12 mm<br/>diagonal legs"]
+    R["22 ohm<br/>0.25 W"]
+    D["IR LED<br/>850 nm, 120 deg<br/>~70 mA"]
     GND["Battery -"]
 
     BAT -->|red| SW
-    SW --> R1
-    SW --> R2
-    R1 --> D1
-    R2 --> D2
-    D1 -->|black| GND
-    D2 -->|black| GND
+    SW --> R
+    R -->|to IR+| D
+    D -->|black, from IR−| GND
 ```
 
-Anode (long leg) to the resistor, cathode (short leg, flat side of the rim) to
-ground.
+Polarity is printed on the part: **IR+** and **IR−** next to their tabs, so there
+is no long-leg/short-leg guessing any more.
+
+> [!TIP]
+> **Solder the leads before fitting the LED.** Once it is seated the tabs sit
+> down a 8.2 mm bore. The tabs are bonded to the thermal slug and sink heat fast,
+> so use a big tip and be quick.
 
 > [!WARNING]
 > **Which switch legs.** On a 4-leg tactile switch the two legs **12.5 mm apart,
@@ -112,15 +149,35 @@ ground.
 
 ## The camera
 
-The weak link in the whole rig.
+No longer the weak link — moving the tracker onto a Pi fixed the part that
+mattered. The C910 on a Pi is a genuinely usable camera.
+
+### Working today: modified C910 on the Pi
 
 | | |
 |---|---|
 | **Body** | Logitech C910. USB 2.0 UVC, colour sensor, autofocus, ~78° diagonal field. Roughly 70° horizontal in 16:9, so lateral coverage is about 1.4 × distance. |
-| **IR-cut filter** | **Removed.** Physically taken out of the lens stack so the sensor can see near-IR at all. This shifts the focal plane — IR focuses differently from visible — so autofocus sits slightly wrong and should be locked. |
-| **IR-pass filter** | **A strip of VHS tape taped over the front glass.** Improvised, and the weakest optical element in the chain: it blocks visible light well but passes only a fraction of the near-IR and isn't optically flat, so it scatters and softens the blob. Worth 2–8× to replace with real filter glass. |
-| **Exposure / gain** | **Not controllable.** See findings — this is the single biggest problem. |
-| **Enumeration** | USB VID `0x046d`, PID `0x0821`. AVFoundation device index 0. The built-in FaceTime camera still has its IR-cut filter and sees nothing, which is why the app has a device picker. |
+| **IR-cut filter** | **Removed.** Physically taken out of the lens stack so the sensor can see near-IR at all. This shifts the focal plane — IR focuses differently from visible — so autofocus sits slightly wrong and is locked in software. |
+| **IR-pass filter** | **A strip of VHS tape over the front glass.** Improvised and the weakest optical element in the chain. Worth 2–8× to replace with real filter glass. |
+| **Exposure / gain** | **Manual, and it works.** `auto_exposure=1`, `exposure_time_absolute=20` (2 ms), `gain=8`, verified by readback. On macOS every one of these returned min 0 / max 0. |
+| **Format** | **MJPEG, forced.** V4L2 hands back uncompressed YUYV by default and 720p of that exceeds USB 2.0 bandwidth, so the camera silently settles at 10 fps. Asking for MJPEG first gets 30. |
+| **Enumeration** | USB VID `0x046d`, PID `0x0821`. `/dev/video0` on the Pi. |
+
+### Incoming: OV9281 + 850 nm bandpass
+
+Mono global shutter, no Bayer filter (~3× the sensitivity of the colour C910),
+and a proper filter instead of tape. Together worth roughly 6–24× signal, which
+buys **range**, not angle — see the finding on beam width below.
+
+> [!CAUTION]
+> **Do not fit the 850 nm bandpass with the old 940 nm LEDs.** A narrow 850 nm
+> passband rejects 940 nm by three or four orders of magnitude. You would see
+> nothing at all, and it looks exactly like a dead camera. Swap the LED and the
+> filter together.
+
+One risk to watch: narrow bandpass filters blue-shift with incidence angle, so
+transmission can fall at the edges of a wide field of view. If the screen corners
+go dark, that is why — a wider filter or a 780 nm longpass is the fix.
 
 ---
 
@@ -155,55 +212,101 @@ Measured, not assumed.
 
 ### ✅ Direct-view tracking reaches 3 m
 
-With the VHS filter fitted, 3 mm LEDs at 17 mA and no other optimisation, the
-camera tracks the LED reliably to about 3 m when it is pointed at the lens. This
-is the working configuration and the baseline everything else should be measured
-against.
+With the VHS filter fitted, the old 3 mm LEDs at 17 mA and no other
+optimisation, the camera tracked the LED reliably to about 3 m **when pointed at
+the lens**. That last clause is the whole problem — see the beam-angle finding —
+but as a range figure it is the baseline everything else is measured against.
 
 ### ❌ Bouncing off the wall is ~1000× short
 
 No reading whatsoever off a wall, at any distance, while the direct path was
 comfortable. See above.
 
-### ❌ macOS will not expose UVC camera controls
+### ❌ macOS will not expose UVC camera controls — ✅ Linux will
 
-This is the root of most of the difficulty. `uvcc` enumerates the C910 correctly
-but every control transfer hangs, and `uvcc ranges` returns min 0 / max 0 for
-every control — libusb can read the descriptor, but the system's own UVC driver
-owns the control interface and will not release it. AVFoundation ignores
+`uvcc` enumerates the C910 correctly on macOS but every control transfer hangs,
+and `uvcc ranges` returns min 0 / max 0 for every control: the system's own UVC
+driver owns the control interface and will not release it. AVFoundation ignores
 exposure and gain too.
 
-This matters far more than it sounds. **Short exposure is the primary
-ambient-rejection technique for IR tracking:** ambient light accumulates in
-proportion to exposure time while a bright LED saturates almost instantly. At
-1–2 ms a lit room nearly vanishes. Being locked out of that setting is why so
-much effort went into background subtraction and adaptive thresholds — all of it
-compensating for one unavailable parameter.
+**On the Pi the same camera reports `exposure_time_absolute` min 3 max 2047 and
+honours it.** This was the project's oldest blocker and the fix was to change
+host, not camera. At 2 ms with gain 8 the room reads luma 5 — near-black — which
+is exactly the intent: ambient accumulates with exposure time while the LED
+saturates almost instantly.
 
-### ⚠️ Current blocker: the LED's beam is too narrow to paint with
+### ⚠️ Current blocker: the LED's beam, not the signal
 
-A 3 mm LED emits over roughly ±20°. Tilt the can and the camera leaves the cone,
-so tracking drops — in practice the can has to be aimed at the camera rather
-than used naturally. Angular falloff is steep (about cos²²θ), so raw sensitivity
-barely helps: a 4× gain widens the usable half-angle from about 20° to 28°.
+The old 3 mm LEDs held lock only within roughly ±20°, so the can had to be aimed
+at the camera rather than painted with.
 
-**Diffusing the emitters is the fix**, taking coverage to roughly ±70–80° at the
-cost of 3–5× peak intensity. Frosting the LED domes with fine sandpaper is a
-free five-minute test. A proper filter would then buy the lost intensity back.
+The decisive measurement: **the same ±20° cone appeared on a Mac at ~16 ms auto
+exposure and on a Pi at 2 ms manual.** Two sensitivity regimes an order of
+magnitude apart, identical usable angle. A signal problem cannot survive that, so
+the limit is the beam.
+
+The arithmetic agrees. Falloff is roughly cos²²θ, so sensitivity barely moves the
+angle — 6–24× more signal widens the usable half-angle from about 20° to 23–30°.
+The same 6–24× spent on range buys 2.4–5×, because that goes as the square root.
+
+**The fix is a wider emitter, not a brighter one.** A 120° part changes the
+exponent rather than the multiplier. At 45° off-axis the old LED is at ~0.0005 of
+peak and a 120° one is at ~0.7.
+
+### ✅ The C910's first open returns a dead stream
+
+Worth knowing because it wastes an evening. The camera enumerates, streams at a
+valid 30 fps, and every pixel of every frame is the same value. It looks exactly
+like a blocked lens. The kernel log shows the real cause — the first probe fails
+with `-5` and the device re-enumerates — and Photo Booth shows the same thing:
+you have to select the camera, select another, and select it back.
+
+`tracker.py` now validates at startup while still on auto exposure, where a live
+sensor always shows read noise, and reopens on a single-valued frame. Checking
+after the switch to 2 ms would not work: a dark room at 2 ms is legitimately
+almost flat.
+
+### ❌ A 15 W supply will not run a Pi 5 with this camera
+
+Three hard crashes, then a fourth. The firmware says why:
+
+```
+max_current              = 3000     5 V x 3 A = 15 W
+usb_max_current_enable   = 0        USB peripherals capped at 600 mA total
+usbpd_power_data_objects = 0 0 0    no PD profile offered at all
+```
+
+A MacBook charger does not advertise a 5 V/5 A profile, so the Pi falls back to
+5 V/3 A and clamps **all** USB peripherals to 600 mA combined. The C910 alone can
+draw 500 mA of that. Under load the board browns out and resets.
+
+Confirmed by watching `vcgencmd get_throttled` flip to `0x50000` (under-voltage
+and throttling both latched) within 20 seconds of the camera streaming, **with no
+browser running at all**. Dropping the display to 1080p helped and was not
+enough.
+
+Use the official 27 W supply. Do **not** set `usb_max_current_enable=1`, the
+common forum advice — it lifts the safety cap without adding a single watt, and
+converts a clean refusal into an unpredictable brownout. A powered hub for the
+camera is a legitimate workaround; it takes 500 mA off the Pi's budget entirely.
 
 ---
 
 ## Open questions
 
-**Projector lamp — decisive, and unanswered.** A UHP or halogen projector floods
-the screen with near-IR and the camera will be looking into it. An LED or laser
-projector emits essentially none. This one fact determines whether a cheap
-longpass filter will do or a proper bandpass is required.
+**~~Projector lamp~~ — settled.** The display is an **LED TV**, which emits no
+meaningful near-IR, so the projector-lamp question is moot and a modest filter
+suffices. Recorded because it drove several earlier decisions.
 
-**Multi-user.** Identical IR LEDs are indistinguishable. Telling cans apart means
-blink-coding an ID into each, which means a microcontroller per can. This is
-genuine new engineering and should be scoped now, since it changes electronics
-that are otherwise finished.
+**Multi-user — unsolved, and in scope.** Identical IR LEDs are indistinguishable
+and the tracker finds exactly one blob. Two cans in frame gives two spots with no
+way to tell which is which. Telling them apart means blink-coding an ID into each
+can, which means a microcontroller per can. None of the incoming hardware
+addresses this. It is genuine new engineering and remains unscoped.
+
+**Calibration in anger.** The 4-corner homography has never been completed on the
+Pi — the board browned out first. Nothing paints without it: `processFrame()`
+returns null with no homography, by design.
 
 **Room lighting** — less of a risk than it sounds. Behind a proper filter, LED
 and fluorescent lighting are nearly invisible; they emit almost no near-IR.
@@ -212,26 +315,28 @@ are the ones that hurt.
 
 ---
 
-## Recommended next step
+## Next step
 
-The current webcam is the weak link, not the concept. For a permanent
-installation, replace it rather than continuing to work around it.
+Assemble the new emitter and **measure the usable cone before changing anything
+else**. Hold the can at a fixed distance and rotate it until lock drops. If that
+is not at least ±45°, the beam-angle reasoning above is wrong and the right move
+is to re-measure, not to pile on more changes.
 
-- **Mono global-shutter USB camera** (OV9281-based, ~£40–60). Monochrome means no
-  Bayer filter and roughly 3× the sensitivity of the colour C910; global shutter
-  removes motion skew; and critically, these expose manual controls that work.
-- **850 nm bandpass filter** (~£15). Bandpass rather than longpass, so it rejects
-  lamp and daylight either side of the LED line.
-- **850 nm high-power LEDs** (TSAL6100/6200 class) at ~100 mA — about 15 Ω per
-  LED on 3 V — diffused for angle.
-- **Fixed short exposure**, ~1–2 ms, with fixed gain and focus. Set once. This is
-  what makes the rig immune to room lighting and to the projector.
-- **Rear projection, if the venue allows it.** Camera behind the screen looking
-  through it: the projector never enters frame, users cast no shadows, and the
-  camera is out of public reach.
+Then, in order: 27 W supply, new camera and filter together, 4-corner
+calibration, and only then multi-user.
+
+> [!NOTE]
+> **A correction worth keeping.** An earlier version of this file recommended
+> TSAL6100/6200-class emitters, chosen for intensity. Those are narrow-beam parts
+> — roughly ±10° and ±17° — and that advice was backwards. Now that beam angle is
+> known to be the binding constraint and there is 30× of sensitivity in reserve
+> (the tracker locks at gain 8 of 255 and 2 ms of a possible 205), the selection
+> criterion is the **widest** half-angle available at 850 nm, not the brightest.
+
+**Rear projection is also dead** as a suggestion: the display is an LED TV.
 
 None of the can hardware is wasted by any of this. Enclosure, button, battery
-holder and wiring all carry over unchanged.
+holder and switch wiring all carry over; only the LED and its resistor change.
 
 Sourcing from Norway: Digi-Key, Mouser and Elfa Distrelec all ship and are
 VOEC-registered (VAT at checkout, no customs handling fee). Arducam direct, The
@@ -247,15 +352,19 @@ Pi Hut, or BerryBase for the camera. AliExpress is fine for the filter.
 | [`stl/`](stl) | Exported STLs |
 | [`AAA_holder.3mf`](AAA_holder.3mf) | Third-party battery holder. Use the `AAA_holder_di_CM.stl` variant — the cradle is cut for its 36.2 mm width |
 | [`test-wall.html`](test-wall.html) | The wall app — [live](https://bnhovde.github.io/ir-graffiti/test-wall.html). Has an **IR can** camera mode: pure-JS blob tracking, rolling background, 4-corner homography calibration, and a diagnostics overlay showing the brightest pixel with no thresholding applied. `app.irTracker` is exposed on the console for tuning |
+| [`tools/pi/tracker.py`](tools/pi/tracker.py) | **The Pi tracker.** Captures, finds the blob, broadcasts normalised coordinates over a WebSocket on :8765, and optionally serves the repo over HTTP. `--source picamera\|webcam\|synthetic`. Also serves a live contrast-stretched camera preview at `/preview` for aiming — necessary because a correctly exposed IR frame looks black to a human |
+| [`tools/pi/kiosk.py`](tools/pi/kiosk.py) | Drives the wall app in a kiosk browser over the Chrome DevTools Protocol, for a Pi with no mouse. `--connect`, `--calibrate`, `--status`. Also takes a screen wake lock |
 | [`tools/irtest.py`](tools/irtest.py) | Standalone Python tuner for the same pipeline, with a live HUD. Needs `opencv-python` |
-| [`tools/ircam-setup.sh`](tools/ircam-setup.sh) | Attempts manual camera control via `uvcc`. **Known not to work on macOS** — kept because it works on Linux, and it now fails in 6 s rather than hanging |
+| [`tools/ircam-setup.sh`](tools/ircam-setup.sh) | Attempts manual camera control via `uvcc`. **Known not to work on macOS**, and superseded on Linux by `tracker.py`, which sets the same controls through `v4l2-ctl` and reads them back |
 | [`canv1.scad`](canv1.scad) | Superseded first draft, kept for reference |
 
 ### Reading the diagnostics overlay
 
 In order — each step is only worth doing if the previous one passed.
 
-1. **`camera`** — if that's not the C910, nothing else matters.
+0. **In Pi mode, none of this applies** — the browser receives coordinates, not
+   pixels. Use the tracker's `/preview` page and its `--stats` line instead.
+1. **`camera`** — if that's not the modified camera, nothing else matters.
 2. **Red cross** — the brightest pixel in the frame, no thresholds at all. Press
    the button. If red doesn't jump to the LED, the problem is upstream of all
    this software.
