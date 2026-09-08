@@ -93,14 +93,34 @@ sw_pin_y  = 4.5;   // (datasheet)
 sw_pin_d  = 2.0;
 
 /* [IR LEDs] */
-led_body_d = 3.0;       // set 5.0 if you got 5 mm LEDs
-led_n      = 2;
+led_type   = "power";   // "power" = one 8 mm 3 W star emitter, 850 nm, 120 deg
+                        // "3mm"   = the original pair of 3 mm indicator LEDs
+led_body_d = 3.0;       // "3mm" only. set 5.0 if you got 5 mm LEDs
+led_n      = 2;         // "3mm" only
 led_mode   = "nozzle";  // "nozzle" = radial, out a nozzle boss on the side of the
                         //            cap, the way a real spray can sprays
                         // "front"  = axial, out the top of the lid
                         // "side"   = v1 behaviour, bare cross holes
 led_offset = 9.5;       // "front" mode only: radius either side of the button
 nozzle_out = 4.0;       // how far the nozzle spout stands proud of the cap
+
+/* [Power LED - 8 mm emitter, 120 degree variant]
+   From the drawing: body 8.0 round (7.2 across the flats), dome / die disc 6.0,
+   thermal slug 6.2 underneath, tabs 1.5 wide x 1.05 thick spanning 14.5 tip to
+   tip, dome 2.6 proud of the body top face. The 120 deg part is 5.0 tall
+   overall, so the body itself is 2.4. The 60/90 deg parts in the same family
+   are 5.9 - the pocket seats on the body TOP face, so the dome lands in the
+   same place whichever one you have and only the tail gets longer. */
+pled_body_d   = 8.0;
+pled_dome_d   = 6.0;
+pled_dome_h   = 2.6;
+pled_tab_w    = 1.5;    // tab width (the 1.05 thickness needs no clearance here,
+                        // the slot runs the full depth of the pocket)
+pled_tab_span = 10.0;   // TRIM THE TABS to this before fitting. The full 14.5
+                        // would break out through the curve of the cap wall.
+pled_proud    = 1.0;    // how far the dome stands out of the nozzle face.
+                        // Sunk behind the bore instead, the 6.5 mm hole would
+                        // vignette the 120 deg beam down to about 85.
 
 /* [Pry slots - for getting the caps back off] */
 pry_w     = 9.0;         // tangential width, both ends
@@ -133,22 +153,27 @@ bsnap_r = 0.40;
 
 /* ---------------------------------------------------------------- derived */
 can_bore   = can_d - 2*wall;         // 56
-shelf_gap  = led_body_d + 3;         // clear space under the disc. In nozzle mode
+pled_pocket_d = pled_body_d + 0.2;   // 8.2 - press fit on the body
+pled_bore_d   = pled_dome_d + 0.5;   // 6.5 - dome clearance
+pled_bore_l   = pled_dome_h - pled_proud;   // 1.6 - bore ahead of the shoulder
+led_foot   = (led_type == "power") ? pled_pocket_d : led_body_d;
+shelf_gap  = led_foot + 3;           // clear space under the disc. In nozzle mode
                                      // this chamber is what the LEDs lie in, so
                                      // it scales with the LED.
 cap_bore   = cap_od - 2*cap_wall;    // 32
 skirt_bore = neck_d + fit;           // 18.3
 skirt_z    = neck_h + 0.5;           // cap seats on the shoulder, not the neck
 chamber_d  = cap_bore - 6;           // 26 - wiring space under the disc
-shelf_z    = neck_h + shelf_gap;     // 15 - top face of the shelf
+shelf_z    = neck_h + shelf_gap;     // top face of the shelf. 21.2 with the
+                                     // power LED, 16 with the 3 mm pair.
 disc_d     = cap_bore - fit;         // 31.7
-disc_z1    = shelf_z + disc_th;      // 17.5
+disc_z1    = shelf_z + disc_th;      // 23.7 power / 18.5 3mm
 plug_h     = sw_body_h + roof_gap;   // roof underside sits just clear of the switch
-cap_body_h = disc_z1 + plug_h;       // 21.6
+cap_body_h = disc_z1 + plug_h;       // 27.8 power / 22.6 3mm
 plug_od    = cap_bore - fit;
 plug_bore  = plug_od - 2*cap_wall;   // 27.7
 roof_z0    = cap_body_h;
-roof_z1    = roof_z0 + roof_th;      // 23.6
+roof_z1    = roof_z0 + roof_th;      // 29.8 power / 24.6 3mm - whole cap
 bead_od    = cap_bore + 2*snap_r;
 bead_ramp  = (bead_od - plug_od)/2;  // 45 deg both sides -> printable, no support
 bead_z     = disc_z1 + plug_h/2;     // bead centre
@@ -163,7 +188,10 @@ led_pass_d = led_body_d + 0.6;   // clearance in the disc ("front" mode)
 //     thing lives in cap_body: no channel has to cross the cap_top joint.
 nozzle_z      = (skirt_z + shelf_z)/2;
 led_pitch     = led_body_d + 1.0;
-nozzle_tip_d  = (led_n-1)*led_pitch + led_body_d + 2.6;   // spout diameter
+// Spout: wide enough to wall the pocket AND to keep the tab slots inside it.
+nozzle_tip_d  = (led_type == "power")
+              ? pled_pocket_d + 5.0                            // 13.2
+              : (led_n-1)*led_pitch + led_body_d + 2.6;
 nozzle_col_d  = nozzle_tip_d + 8;                         // collar at the wall
 nozzle_col_l  = (nozzle_col_d - nozzle_tip_d)/2;          // 45 deg -> no support
 // sink the collar just far enough that its rim is inside the cap's curve
@@ -256,8 +284,11 @@ module cap_body() {
                 translate([-pry_w/2, cap_od/2 - pry_d, cap_body_h - pry_h])
                     cube([pry_w, pry_d + 1, pry_h + 0.01]);
 
-            // LED channels, drilled radially out through the nozzle
-            if (led_mode == "nozzle") led_channels();
+            // LED cavity, drilled radially out through the nozzle
+            if (led_mode == "nozzle") {
+                if (led_type == "power") power_led_cavity();
+                else                     led_channels();
+            }
             if (led_mode == "side") side_led_holes((disc_z1 + cap_body_h)/2);
         }
 
@@ -328,6 +359,32 @@ module led_channels() {
         translate([(i - (led_n-1)/2) * led_pitch, 0, nozzle_z])
             rotate([-90,0,0])
                 cylinder(h = cap_od/2 + nozzle_out + 1, d = led_hole_d);
+}
+
+/* Pocket for the 8 mm power emitter, bored in from the nozzle face: a short
+   dome clearance, a shoulder the body's top face seats against, then the body
+   pocket running back into the wiring chamber. Seating on the top face rather
+   than the underside is what makes the dome land in the same place whichever
+   height variant of the emitter you got.
+
+   Two slots take the tabs out sideways into the chamber so the leads can be
+   soldered and routed. They are only a real cut where they pass outside the
+   pocket - a 1.4 mm bridge each side - so this still prints without support
+   with cap_body rim up. */
+module power_led_cavity() {
+    y_face = cap_od/2 + nozzle_out;
+    translate([0, y_face, nozzle_z]) rotate([90,0,0]) {
+        translate([0,0,-0.01])
+            cylinder(h=pled_bore_l+0.01, d=pled_bore_d);            // dome
+        translate([0,0,pled_bore_l])
+            cylinder(h=y_face - chamber_d/2 - pled_bore_l + 0.01,
+                     d=pled_pocket_d);                              // body
+    }
+    translate([-pled_tab_span/2, chamber_d/2,
+               nozzle_z - (pled_tab_w + 0.3)/2])
+        cube([pled_tab_span,
+              y_face - pled_bore_l - chamber_d/2,
+              pled_tab_w + 0.3]);                                   // tabs
 }
 
 /* v1-style cross holes, kept as an option via led_mode = "side" */
