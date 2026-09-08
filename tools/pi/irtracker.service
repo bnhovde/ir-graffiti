@@ -1,0 +1,21 @@
+[Unit]
+Description=IR graffiti tracker
+Documentation=https://github.com/bnhovde/ir-graffiti
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ir-graffiti
+# Detection settings are the tracker's defaults now - all measured, see the
+# README. Only --lock-need is overridden: 1 costs 33 ms of press latency
+# instead of 100, which is safe now that a minimum blob area rejects the
+# single-pixel noise that used to paint by itself.
+ExecStart=/usr/bin/python3 %h/ir-graffiti/tools/pi/tracker.py \
+    --source webcam --device 0 --lock-need 1 --serve 8000 --stats
+Restart=always
+RestartSec=3
+StandardOutput=append:%h/ir-graffiti/tracker.log
+StandardError=append:%h/ir-graffiti/tracker.log
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=IR graffiti wall (kiosk browser)
+Documentation=https://github.com/bnhovde/ir-graffiti
+After=graphical-session.target irtracker.service
+Wants=irtracker.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ir-graffiti
+ExecStart=%h/ir-graffiti/tools/pi/start-kiosk.sh
+Restart=always
+RestartSec=5
+StandardOutput=append:%h/ir-graffiti/kiosk.log
+StandardError=append:%h/ir-graffiti/kiosk.log
+
+[Install]
+WantedBy=default.target
