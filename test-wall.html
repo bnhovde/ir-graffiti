@@ -1185,6 +1185,7 @@ class PaintApp {
     this.hands = new Map();
     this.handTrackingOn = false;
     this.camMode = 'hand';
+    this.canEmaAlpha = 0.75;   // see onCanFrame - trades jitter for latency
     this.canTracker = new CanTracker();
     this.irTracker = new IRTracker();
     this.piTracker = new PiTracker();
@@ -1868,7 +1869,14 @@ class PaintApp {
     }
     this._canMiss = 0;
     const rawX = (r.mapped ? r.nx : 1 - r.nx) * this.vw, rawY = r.ny * this.vh;
-    const alpha = 0.45; // smoothing: lower = smoother but more lag, higher = more responsive but jittery
+    // Exponential smoothing on the cursor. Its cost is LATENCY, and the cost is
+    // paid in frames, not seconds: it needs about 5 frames to settle, so at 33
+    // fps that is ~150 ms of lag and at 10 fps it was half a second. 0.45 was
+    // chosen when the tracker was noisy and barely above its threshold. It now
+    // delivers a position stable to +/-0.005 with 4.6x margin, so most of that
+    // filtering is no longer being paid for anything. Tune live from the
+    // console with app.canEmaAlpha = 0.9 (1.0 = no smoothing at all).
+    const alpha = this.canEmaAlpha;
     this._canEmaX = this._canEmaX == null ? rawX : this._canEmaX + (rawX - this._canEmaX) * alpha;
     this._canEmaY = this._canEmaY == null ? rawY : this._canEmaY + (rawY - this._canEmaY) * alpha;
     const x = this._canEmaX, y = this._canEmaY;
