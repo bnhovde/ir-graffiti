@@ -112,8 +112,18 @@ nozzle_out    = 4.0;    // how far the nozzle spout stands proud of the cap
 pled_body_d   = 8.0;
 pled_dome_d   = 6.0;
 pled_dome_h   = 2.6;
-pled_body_h   = 3.65;   // measured. Sets how deep the bore runs, and so how
-                        // much of the LED ends up inside the nozzle.
+pled_body_h   = 2.4;    // tab plane to the top of the body, dome excluded:
+                        // 5.0 total less the 2.6 dome. This sets the bore
+                        // depth, and so also the thickness of the ring the
+                        // tabs bear on.
+                        //
+                        // SET THIS TO THE SMALLEST BODY HEIGHT YOU BELIEVE,
+                        // never the largest. The error is not symmetric. Too
+                        // short and the body stands a little proud, which
+                        // costs nothing - the tabs still bear, and the dome is
+                        // still completely clear. Too long and the body sits
+                        // recessed, and then the bore clips the beam, which is
+                        // the whole thing this design exists to avoid.
 pled_tab_w    = 1.5;    // tab width, across the slot (the 1.05 thickness runs
                         // along the bore, where the slot is long anyway)
 pled_tab_stag = 1.5;    // THE TABS ARE STAGGERED, not opposite each other: one
@@ -536,7 +546,8 @@ else if (part == "button_disc") button_disc();
 else if (part == "bottom_cap")  bottom_cap();
 else if (part != "none")        layout_all();
 
-echo(str("LED: whole ", pled_dome_h, " dome proud, body flush; tab slot ",
+echo(str("LED: dome tip ", pled_dome_h, " + (body - ", pled_body_h,
+         ") proud of the face; front ring ", pled_body_h, " thick; tab slot ",
          pled_tab_w + pled_tab_stag + 0.3, " tall x ", pled_tab_span + 0.4,
          " wide, bearing at y=", pled_tab_y, " on ",
          (nozzle_tip_d - pled_pocket_d)/2, " of ring; spout ", nozzle_tip_d,
