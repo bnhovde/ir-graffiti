@@ -82,6 +82,19 @@
     padding:6px;display:none;flex-direction:column;gap:2px;z-index:20;
   }
   .dropdown.open{display:flex;}
+  /* The overflow menu. Everything except mode and clear lives in here now:
+     these are mouse controls for setting up and debugging, and keeping them
+     on the bar just made a row of 36 px targets nobody can hit with a can. */
+  #gp-more-menu{min-width:210px;overflow:visible;}
+  #gp-more-menu .rel{position:relative;display:block;}
+  #gp-more-menu .iconbtn{
+    width:100%;height:40px;justify-content:flex-start;gap:12px;padding:0 10px;
+    border:none;background:none;box-shadow:none;border-radius:9px;
+    font:600 13px 'Space Grotesk',sans-serif;color:var(--panel-fg);
+  }
+  #gp-more-menu .iconbtn:hover{background:var(--panel-hover-bg);}
+  #gp-more-menu .iconbtn svg{width:18px;height:18px;flex:none;}
+  #gp-more-menu .mi-label{white-space:nowrap;}
   .dropdown-item{
     display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;border:none;background:none;
     font:600 13px 'Space Grotesk',sans-serif;color:var(--panel-fg);text-align:left;cursor:pointer;width:100%;
@@ -210,13 +223,31 @@
   .can-picker{position:fixed;inset:0;z-index:40;display:none;align-items:center;justify-content:center;
     background:rgba(0,0,0,0.34);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
   .can-picker.show{display:flex;}
-  .can-picker-row{display:flex;gap:30px;align-items:center;}
+  .can-picker-row{display:flex;gap:34px;align-items:center;}
   .can-picker-item{
-    width:124px;height:124px;border-radius:50%;outline:5px solid transparent;outline-offset:9px;
-    display:flex;align-items:center;justify-content:center;font-size:56px;
+    min-width:168px;height:168px;border-radius:84px;outline:5px solid transparent;outline-offset:11px;
+    display:flex;align-items:center;justify-content:center;font-size:64px;
     transition:transform .12s ease,outline-color .12s ease;box-shadow:0 6px 22px rgba(0,0,0,0.35);
   }
-  .can-picker-item.on{transform:scale(1.16);outline-color:#fff;}
+  .can-picker-item.on{transform:scale(1.14);outline-color:#fff;}
+  /* Mode cards carry text, so they are wider than the round colour targets. */
+  .can-picker-item.is-mode{
+    padding:0 34px;background:#fff;color:#161616;border-radius:34px;
+    font:700 27px 'Space Grotesk',sans-serif;text-align:center;line-height:1.15;
+  }
+  .can-picker-item.is-size{background:#fff;}
+  .can-picker-item.is-size i{display:block;border-radius:50%;background:#161616;}
+
+  /* Bottom pills: the can's targets. Sized to be hittable at range, not to be
+     pretty - the tracker cannot reliably land on anything smaller. */
+  .can-pill{
+    display:flex;align-items:center;justify-content:center;gap:8px;height:44px;min-width:44px;padding:0 18px;
+    border-radius:24px;border:1px solid var(--btn-border);background:var(--btn-bg);position:relative;cursor:pointer;
+    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);box-shadow:0 4px 14px rgba(0,0,0,0.1);
+    font:600 13px 'Space Grotesk',sans-serif;color:#161616;user-select:none;
+  }
+  .can-pill.arming{box-shadow:0 0 0 3px var(--selected-bg),0 4px 14px rgba(0,0,0,0.1);}
+  .can-pill i{display:block;border-radius:50%;background:#161616;}
   .can-picker-hint{position:absolute;bottom:14%;color:#fff;opacity:0.92;
     font:600 15px 'Space Grotesk',sans-serif;letter-spacing:0.01em;}
 
@@ -276,6 +307,13 @@
       <svg viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
     <div id="gp-theme-menu" class="dropdown"></div>
+  </div>
+
+  <div class="rel">
+    <button id="gp-more-btn" class="iconbtn" title="More">
+      <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="5" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="19" r="1.6" fill="currentColor"/></svg>
+    </button>
+    <div id="gp-more-menu" class="dropdown"></div>
   </div>
 
   <button id="gp-undo" class="iconbtn" title="Undo">
@@ -397,9 +435,8 @@
 
 <div class="bottom-controls">
   <div id="gp-swatches" class="swatches" style="position:relative;"></div>
-  <div class="size-pill">
-    <input id="gp-size" type="range" min="0.6" max="1.8" step="0.05" value="1">
-  </div>
+  <div id="gp-mode-pill" class="can-pill" title="Mode"><span id="gp-mode-pill-label">Paint blobs</span></div>
+  <div id="gp-size-pill" class="can-pill" title="Brush size"><i id="gp-size-dot"></i></div>
 </div>
 
 <script>
@@ -1390,6 +1427,7 @@ function computeHomography(src, dst) {
 // a perspective homography, so the camera can be mounted off-axis (not straight-on to the wall).
 
 /* ---------------- App shell ---------------- */
+const SIZE_STEPS = [0.6, 0.85, 1.1, 1.45, 1.8];
 const THEMES = { blobs: BlobsTheme, ink: InkTheme, fruit: FruitTheme, spray: SprayBrushTheme, space: SpaceTheme };
 const THEME_ORDER = ['blobs', 'ink', 'fruit', 'spray', 'space'];
 
@@ -1431,6 +1469,7 @@ class PaintApp {
     this.scratchOctx = this.scratchOverlay.getContext('2d');
 
     this.buildThemeMenu();
+    this.buildTopMenu();
     this.wireInput();
     this.wireUI();
     this.wireKeys();
@@ -1501,6 +1540,7 @@ class PaintApp {
     this.refreshSwatchOutlines();
     this.updateSettingsPanel();
     document.getElementById('gp-theme-label').textContent = this.theme.label;
+    this.refreshCanPills();
     document.querySelectorAll('#gp-theme-menu .dropdown-item').forEach(el => el.classList.toggle('selected', el.dataset.theme === id));
   }
 
@@ -1886,6 +1926,40 @@ class PaintApp {
     window.addEventListener('pointercancel', (e) => this.pointerUp(e.pointerId));
   }
 
+  /* Fold the toolbar into a single overflow menu, matching the agreed layout:
+     [ mode ] [ clear ] [ more ]. The nodes are MOVED rather than rebuilt, so
+     every existing listener and every panel anchored to a .rel wrapper keeps
+     working - rebuilding them would mean re-wiring the stencil, camera,
+     settings and info panels by hand. */
+  buildTopMenu() {
+    const menu = document.getElementById('gp-more-menu');
+    const rows = [
+      ['gp-undo', 'Undo'], ['gp-save', 'Save'], ['gp-fullscreen-btn', 'Fullscreen'],
+      ['gp-stencil-btn', 'Stencil'], ['gp-cam-btn', 'Camera'],
+      ['gp-settings-btn', 'Settings'], ['gp-info-btn', 'Info'],
+    ];
+    for (const [id, label] of rows) {
+      const btn = document.getElementById(id);
+      if (!btn) continue;
+      if (!btn.querySelector('.mi-label')) {
+        const t = document.createElement('span');
+        t.className = 'mi-label'; t.textContent = label;
+        btn.appendChild(t);
+      }
+      // Move the .rel wrapper when there is one, so its panel travels with it.
+      const node = btn.parentElement && btn.parentElement.classList.contains('rel')
+        ? btn.parentElement : btn;
+      menu.appendChild(node);
+    }
+    document.getElementById('gp-more-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      const open = menu.classList.contains('open');
+      closeAllDropdowns();
+      menu.classList.toggle('open', !open);
+      document.getElementById('gp-more-btn').classList.toggle('open', !open);
+    });
+  }
+
   buildThemeMenu() {
     const menu = document.getElementById('gp-theme-menu');
     menu.innerHTML = '';
@@ -1917,37 +1991,87 @@ class PaintApp {
      are where you point and how long you hold. Dwelling on the swatch bar
      opens a large-target menu; moving highlights; releasing the button picks.
      Painting is suppressed over the bar, or you would spray the UI. */
-  canPickerHotspot() {
-    const el = document.getElementById('gp-swatches');
-    if (!el) return null;
-    const r = el.getBoundingClientRect();
+  // The three can targets, in the order they sit along the bottom bar.
+  canTargets() {
+    return [['color', 'gp-swatches'], ['mode', 'gp-mode-pill'], ['size', 'gp-size-pill']];
+  }
+  canTargetAt(x, y) {
     const pad = 46;         // generous - the tracker jitters several px
-    return { x0: r.left - pad, y0: r.top - pad, x1: r.right + pad, y1: r.bottom + pad };
+    for (const [kind, id] of this.canTargets()) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (x >= r.left - pad && x <= r.right + pad &&
+          y >= r.top - pad && y <= r.bottom + pad) return { kind, el };
+    }
+    return null;
   }
-  overCanPicker(x, y) {
-    const h = this.canPickerHotspot();
-    return !!h && x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1;
+
+  // What each control offers, how it renders, and what picking one does.
+  canPickerSpec(kind) {
+    if (kind === 'mode') {
+      const ids = THEME_ORDER.slice();
+      return {
+        items: ids.map(id => ({ cls: 'is-mode', text: new THEMES[id](this).label })),
+        current: Math.max(0, ids.indexOf(this.themeId)),
+        pick: i => this.setTheme(ids[i]),
+      };
+    }
+    if (kind === 'size') {
+      return {
+        items: SIZE_STEPS.map(v => ({ cls: 'is-size', dot: Math.round(14 + v * 46) })),
+        current: SIZE_STEPS.indexOf(this.nearestSizeStep()),
+        pick: i => { this.sizeScale = SIZE_STEPS[i]; this.refreshCanPills(); },
+      };
+    }
+    return {
+      items: this.theme.swatches.map(sw => ({
+        bg: sw.background || sw.css, shadow: sw.boxShadow, text: sw.glyph })),
+      current: this.theme.brush,
+      pick: i => { this.theme.setColor(i); this.refreshSwatchOutlines(); },
+    };
   }
-  armCanPicker(frac) {
-    const el = document.getElementById('gp-swatches');
-    if (!el) return;
-    el.classList.toggle('arming', frac > 0);
-    el.style.setProperty('--arm', Math.min(1, frac).toFixed(3));
+  nearestSizeStep() {
+    return SIZE_STEPS.reduce((a, b) =>
+      Math.abs(b - this.sizeScale) < Math.abs(a - this.sizeScale) ? b : a);
   }
-  openCanPicker() {
+  refreshCanPills() {
+    const lbl = document.getElementById('gp-mode-pill-label');
+    if (lbl) lbl.textContent = this.theme.label;
+    const dot = document.getElementById('gp-size-dot');
+    if (dot) {
+      const d = Math.round(8 + this.sizeScale * 12);
+      dot.style.width = d + 'px'; dot.style.height = d + 'px';
+    }
+  }
+  armCanPicker(frac, el) {
+    for (const [, id] of this.canTargets()) {
+      const t = document.getElementById(id);
+      if (!t) continue;
+      const on = frac > 0 && t === el;
+      t.classList.toggle('arming', on);
+      t.style.setProperty('--arm', on ? Math.min(1, frac).toFixed(3) : '0');
+    }
+  }
+  openCanPicker(kind) {
+    const spec = this.canPickerSpec(kind || 'color');
+    this._pickerKind = kind || 'color';
+    this._pickerSpec = spec;
     const row = document.getElementById('gp-can-picker-row');
     row.innerHTML = '';
-    this.theme.swatches.forEach(sw => {
+    spec.items.forEach(it => {
       const d = document.createElement('div');
-      d.className = 'can-picker-item';
-      d.style.background = sw.background || sw.css || 'transparent';
-      if (sw.boxShadow) d.style.boxShadow = sw.boxShadow;
-      if (sw.glyph) d.textContent = sw.glyph;
+      d.className = 'can-picker-item' + (it.cls ? ' ' + it.cls : '');
+      if (it.bg) d.style.background = it.bg;
+      if (it.shadow) d.style.boxShadow = it.shadow;
+      if (it.dot) { const i = document.createElement('i');
+                    i.style.width = it.dot + 'px'; i.style.height = it.dot + 'px'; d.appendChild(i); }
+      else if (it.text) d.textContent = it.text;
       row.appendChild(d);
     });
     document.getElementById('gp-can-picker').classList.add('show');
     this._pickerOpen = true;
-    this._pickerIndex = this.theme.brush;
+    this._pickerIndex = spec.current;
     this.updateCanPicker(this.vw / 2, this.vh / 2);
   }
   updateCanPicker(x, y) {
@@ -1967,13 +2091,13 @@ class PaintApp {
   }
   closeCanPicker(commit) {
     document.getElementById('gp-can-picker').classList.remove('show');
-    this.armCanPicker(0);
-    if (commit && this._pickerIndex != null) {
-      this.theme.setColor(this._pickerIndex);
-      this.refreshSwatchOutlines();
+    this.armCanPicker(0, null);
+    if (commit && this._pickerIndex != null && this._pickerSpec) {
+      this._pickerSpec.pick(this._pickerIndex);
     }
     this._pickerOpen = false;
     this._pickerDwell = 0;
+    this._pickerSpec = null;
   }
   refreshSwatchOutlines() {
     document.querySelectorAll('#gp-swatches .swatch').forEach((b, idx) => b.classList.toggle('selected', idx === this.theme.brush));
@@ -2016,8 +2140,16 @@ class PaintApp {
     document.getElementById('gp-clear').addEventListener('click', () => this.clearCanvas());
     document.getElementById('gp-save').addEventListener('click', () => this.save());
 
-    const slider = document.getElementById('gp-size');
-    slider.addEventListener('input', () => { this.sizeScale = parseFloat(slider.value); });
+    // The size slider is gone: a 4 px thumb is unhittable with a spray can.
+    // Both pills open the same big menu the can uses, so mouse and can share
+    // one control rather than drifting apart.
+    document.getElementById('gp-mode-pill')
+      .addEventListener('click', () => this.openCanPicker('mode'));
+    document.getElementById('gp-size-pill')
+      .addEventListener('click', () => this.openCanPicker('size'));
+    document.getElementById('gp-swatches')
+      .addEventListener('dblclick', () => this.openCanPicker('color'));
+    this.refreshCanPills();
 
     this.wireFullscreen();
   }
@@ -2282,7 +2414,7 @@ class PaintApp {
         // Releasing the trigger is the commit: it is the only "click" the can
         // has, so letting go of the button is how you choose a colour.
         if (this._pickerOpen) this.closeCanPicker(true);
-        this._pickerDwell = 0; this.armCanPicker(0);
+        this._pickerDwell = 0; this._pickerTarget = null; this.armCanPicker(0, null);
         if (this.strokes.has(key)) this.pointerUp(key);
         this._canEmaX = null; this._canEmaY = null;
         this.setCursor(null, null, false);
@@ -2306,16 +2438,18 @@ class PaintApp {
 
     if (this._pickerOpen) { this.updateCanPicker(x, y); return; }
 
-    if (this.overCanPicker(x, y)) {
-      // Never paint over the bar - you would spray the controls trying to
-      // reach them - and lift any stroke that wandered in.
+    const target = this.canTargetAt(x, y);
+    if (target) {
+      // Never paint over the controls - you would spray them trying to reach
+      // them - and lift any stroke that wandered in.
       if (this.strokes.has(key)) this.pointerUp(key);
+      if (target.kind !== this._pickerTarget) { this._pickerTarget = target.kind; this._pickerDwell = 0; }
       this._pickerDwell += dt;
-      this.armCanPicker(this._pickerDwell / this.PICKER_ARM_MS);
-      if (this._pickerDwell >= this.PICKER_ARM_MS) this.openCanPicker();
+      this.armCanPicker(this._pickerDwell / this.PICKER_ARM_MS, target.el);
+      if (this._pickerDwell >= this.PICKER_ARM_MS) this.openCanPicker(target.kind);
       return;
     }
-    if (this._pickerDwell) { this._pickerDwell = 0; this.armCanPicker(0); }
+    if (this._pickerDwell) { this._pickerDwell = 0; this._pickerTarget = null; this.armCanPicker(0, null); }
 
     if (!this.strokes.has(key)) this.pointerDown(key, x, y);
     else this.pointerMove(key, x, y);
