@@ -194,6 +194,31 @@
   }
   .swatch{width:28px;height:28px;border-radius:50%;border:none;padding:0;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;outline:2px solid transparent;outline-offset:3px;}
   .swatch.selected{outline:2.5px solid var(--selected-bg);}
+  /* Arming ring: fills while the can dwells on the bar, so it is obvious
+     something is about to happen rather than the menu just appearing. */
+  .swatches.arming{box-shadow:0 0 0 3px var(--selected-bg),0 4px 14px rgba(0,0,0,0.1);}
+  .swatches.arming::after{
+    content:'';position:absolute;inset:-9px;border-radius:28px;pointer-events:none;
+    background:conic-gradient(var(--selected-bg) calc(var(--arm,0)*1turn),transparent 0);
+    -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 0);
+    mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 0);
+  }
+
+  /* Can-driven colour menu. Targets are deliberately huge: the bar's own
+     swatches are 28 px, which the tracker cannot reliably hit from across a
+     room, and the can has no gesture finer than "point and hold". */
+  .can-picker{position:fixed;inset:0;z-index:40;display:none;align-items:center;justify-content:center;
+    background:rgba(0,0,0,0.34);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
+  .can-picker.show{display:flex;}
+  .can-picker-row{display:flex;gap:30px;align-items:center;}
+  .can-picker-item{
+    width:124px;height:124px;border-radius:50%;outline:5px solid transparent;outline-offset:9px;
+    display:flex;align-items:center;justify-content:center;font-size:56px;
+    transition:transform .12s ease,outline-color .12s ease;box-shadow:0 6px 22px rgba(0,0,0,0.35);
+  }
+  .can-picker-item.on{transform:scale(1.16);outline-color:#fff;}
+  .can-picker-hint{position:absolute;bottom:14%;color:#fff;opacity:0.92;
+    font:600 15px 'Space Grotesk',sans-serif;letter-spacing:0.01em;}
 
   .size-pill{
     display:flex;align-items:center;gap:8px;padding:0 14px;height:44px;border-radius:24px;border:1px solid var(--btn-border);
@@ -365,8 +390,13 @@
   </div>
 </div>
 
+<div id="gp-can-picker" class="can-picker">
+  <div id="gp-can-picker-row" class="can-picker-row"></div>
+  <div class="can-picker-hint">Move the can to choose · release to pick</div>
+</div>
+
 <div class="bottom-controls">
-  <div id="gp-swatches" class="swatches"></div>
+  <div id="gp-swatches" class="swatches" style="position:relative;"></div>
   <div class="size-pill">
     <input id="gp-size" type="range" min="0.6" max="1.8" step="0.05" value="1">
   </div>
@@ -1383,6 +1413,8 @@ class PaintApp {
     this.hands = new Map();
     this.handTrackingOn = false;
     this.camMode = 'hand';
+    this.PICKER_ARM_MS = 900;   // dwell on the swatch bar before the menu opens
+    this._pickerOpen = false; this._pickerDwell = 0; this._pickerIndex = null;
     this.canEmaAlpha = 0.75;   // see onCanFrame - trades jitter for latency
     this.canTracker = new CanTracker();
     this.irTracker = new IRTracker();
@@ -1880,6 +1912,69 @@ class PaintApp {
       wrap.appendChild(b);
     });
   }
+  /* ---- spray-to-open colour picker ----------------------------------
+     The can has one control, the trigger, so the only gestures it can make
+     are where you point and how long you hold. Dwelling on the swatch bar
+     opens a large-target menu; moving highlights; releasing the button picks.
+     Painting is suppressed over the bar, or you would spray the UI. */
+  canPickerHotspot() {
+    const el = document.getElementById('gp-swatches');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const pad = 46;         // generous - the tracker jitters several px
+    return { x0: r.left - pad, y0: r.top - pad, x1: r.right + pad, y1: r.bottom + pad };
+  }
+  overCanPicker(x, y) {
+    const h = this.canPickerHotspot();
+    return !!h && x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1;
+  }
+  armCanPicker(frac) {
+    const el = document.getElementById('gp-swatches');
+    if (!el) return;
+    el.classList.toggle('arming', frac > 0);
+    el.style.setProperty('--arm', Math.min(1, frac).toFixed(3));
+  }
+  openCanPicker() {
+    const row = document.getElementById('gp-can-picker-row');
+    row.innerHTML = '';
+    this.theme.swatches.forEach(sw => {
+      const d = document.createElement('div');
+      d.className = 'can-picker-item';
+      d.style.background = sw.background || sw.css || 'transparent';
+      if (sw.boxShadow) d.style.boxShadow = sw.boxShadow;
+      if (sw.glyph) d.textContent = sw.glyph;
+      row.appendChild(d);
+    });
+    document.getElementById('gp-can-picker').classList.add('show');
+    this._pickerOpen = true;
+    this._pickerIndex = this.theme.brush;
+    this.updateCanPicker(this.vw / 2, this.vh / 2);
+  }
+  updateCanPicker(x, y) {
+    const items = [...document.querySelectorAll('#gp-can-picker-row .can-picker-item')];
+    if (!items.length) return;
+    // Nearest centre rather than a hit test: forgiving of the jitter, and it
+    // means there is always exactly one selection, never a gap between targets.
+    let best = 0, bestD = Infinity;
+    items.forEach((el, i) => {
+      const r = el.getBoundingClientRect();
+      const dx = x - (r.left + r.width / 2), dy = y - (r.top + r.height / 2);
+      const d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    this._pickerIndex = best;
+    items.forEach((el, i) => el.classList.toggle('on', i === best));
+  }
+  closeCanPicker(commit) {
+    document.getElementById('gp-can-picker').classList.remove('show');
+    this.armCanPicker(0);
+    if (commit && this._pickerIndex != null) {
+      this.theme.setColor(this._pickerIndex);
+      this.refreshSwatchOutlines();
+    }
+    this._pickerOpen = false;
+    this._pickerDwell = 0;
+  }
   refreshSwatchOutlines() {
     document.querySelectorAll('#gp-swatches .swatch').forEach((b, idx) => b.classList.toggle('selected', idx === this.theme.brush));
   }
@@ -2177,10 +2272,17 @@ class PaintApp {
 
   onCanFrame(r) {
     const key = 'can';
+    const now = performance.now();
+    const dt = this._canLastT ? now - this._canLastT : 0;
+    this._canLastT = now;
     if (!r) {
       // debounce loss of tracking — a single dropped/blurry frame shouldn't lift the pen
       this._canMiss = (this._canMiss || 0) + 1;
       if (this._canMiss > 4) {
+        // Releasing the trigger is the commit: it is the only "click" the can
+        // has, so letting go of the button is how you choose a colour.
+        if (this._pickerOpen) this.closeCanPicker(true);
+        this._pickerDwell = 0; this.armCanPicker(0);
         if (this.strokes.has(key)) this.pointerUp(key);
         this._canEmaX = null; this._canEmaY = null;
         this.setCursor(null, null, false);
@@ -2201,6 +2303,20 @@ class PaintApp {
     this._canEmaY = this._canEmaY == null ? rawY : this._canEmaY + (rawY - this._canEmaY) * alpha;
     const x = this._canEmaX, y = this._canEmaY;
     this.setCursor(x, y, true);
+
+    if (this._pickerOpen) { this.updateCanPicker(x, y); return; }
+
+    if (this.overCanPicker(x, y)) {
+      // Never paint over the bar - you would spray the controls trying to
+      // reach them - and lift any stroke that wandered in.
+      if (this.strokes.has(key)) this.pointerUp(key);
+      this._pickerDwell += dt;
+      this.armCanPicker(this._pickerDwell / this.PICKER_ARM_MS);
+      if (this._pickerDwell >= this.PICKER_ARM_MS) this.openCanPicker();
+      return;
+    }
+    if (this._pickerDwell) { this._pickerDwell = 0; this.armCanPicker(0); }
+
     if (!this.strokes.has(key)) this.pointerDown(key, x, y);
     else this.pointerMove(key, x, y);
   }
