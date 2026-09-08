@@ -88,6 +88,28 @@ def main():
           calibrated: app.piTracker.calibrated,
           live: !!app.handTrackingOn,
           last: app.piTracker.last, stats: app.piTracker.stats })"""
+    elif args[0] == "--latency":
+        # Run this WHILE painting: it only samples when there is a fix, because
+        # the tracker sends a timestamp only with a position.
+        secs = float(args[1]) if len(args) > 1 else 20
+        expr = f"""(async () => {{
+          const t = app.piTracker, lat = []; let frames = 0, seen = null;
+          const t0 = performance.now();
+          const tick = () => {{ frames++;
+            if (performance.now()-t0 < {secs*1000}) requestAnimationFrame(tick); }};
+          requestAnimationFrame(tick);
+          while (performance.now() - t0 < {secs*1000}) {{
+            await new Promise(r => setTimeout(r, 50));
+            if (t.latency != null && t.latency !== seen) {{ lat.push(t.latency); seen = t.latency; }}
+          }}
+          lat.sort((a,b)=>a-b);
+          const q = f => lat.length ? lat[Math.min(lat.length-1, Math.floor(lat.length*f))] : null;
+          return {{ samples: lat.length, min_ms: q(0), p50_ms: q(0.5),
+                   p90_ms: q(0.9), max_ms: q(0.999),
+                   rafFps: +(frames/((performance.now()-t0)/1000)).toFixed(1),
+                   note: lat.length ? "" : "no fix seen - hold the button at the camera while this runs" }};
+        }})()"""
+        timeout = max(timeout, secs + 20)
     elif args[0] == "--wakelock":
         expr = WAKELOCK
     else:
