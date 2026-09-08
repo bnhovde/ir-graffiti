@@ -2152,11 +2152,26 @@ class PaintApp {
     const camBtn = document.getElementById('gp-cam-btn'), camPanel = document.getElementById('gp-cam-panel');
     const stencilBtn = document.getElementById('gp-stencil-btn'), stencilPanel = document.getElementById('gp-stencil-panel');
 
-    const toggle = (btn, panel) => { const open = panel.classList.contains('open'); closeAllDropdowns(); if (!open) { panel.classList.add('open'); btn.classList.add('open'); } };
+    const toggle = (btn, panel) => {
+      const open = panel.classList.contains('open');
+      closeAllDropdowns();
+      // Buttons that now live inside the overflow menu carry their panel with
+      // them, so closeAllDropdowns closes the menu AND the panel inside it -
+      // clicking Camera looked like it did nothing at all. Reopen the menu
+      // when the button we are toggling belongs to it.
+      const more = document.getElementById('gp-more-menu');
+      if (!open && more && more.contains(btn)) {
+        more.classList.add('open');
+        document.getElementById('gp-more-btn').classList.add('open');
+      }
+      if (!open) { panel.classList.add('open'); btn.classList.add('open'); }
+    };
     settingsBtn.addEventListener('click', (e) => { e.stopPropagation(); toggle(settingsBtn, settingsPanel); });
     infoBtn.addEventListener('click', (e) => { e.stopPropagation(); toggle(infoBtn, infoPanel); });
     camBtn.addEventListener('click', (e) => { e.stopPropagation(); toggle(camBtn, camPanel); });
     stencilBtn.addEventListener('click', (e) => { e.stopPropagation(); toggle(stencilBtn, stencilPanel); });
+    document.getElementById('gp-more-menu')
+      .addEventListener('click', e => e.stopPropagation());
     document.addEventListener('click', () => closeAllDropdowns());
     [settingsPanel, infoPanel, camPanel, stencilPanel].forEach(p => p.addEventListener('click', (e) => e.stopPropagation()));
 
