@@ -13,6 +13,7 @@
   Compare against the wall to see what the app itself is adding.
     keys:  s  smoothing on/off      m  mirror
            t  trail on/off          h  hide the readout
+    no keyboard? use ?mirror=1&smooth=1&trail=1
 -->
 <style>
   :root { color-scheme: dark; }
@@ -45,7 +46,12 @@
 
 <script>
 const dot = document.getElementById('dot'), hud = document.getElementById('hud');
-let smooth = false, mirror = false, trail = false;
+// Query parameters as well as keys: the exhibition Pi has no keyboard, so a
+// keys-only control scheme is unreachable on the machine that matters.
+//   ?mirror=1&smooth=1&trail=1
+const qs = new URLSearchParams(location.search);
+const flag = (k, d = false) => qs.has(k) ? qs.get(k) !== '0' : d;
+let smooth = flag('smooth'), mirror = flag('mirror'), trail = flag('trail');
 let ex = null, ey = null;              // smoothed position, when enabled
 const ALPHA = 0.5;
 
