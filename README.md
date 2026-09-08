@@ -3,17 +3,28 @@
 A handheld spray can emits infrared; a camera watches for it and paints where it
 points.
 
-**Status:** the whole chain runs end to end — can, camera, tracker, wall app — on
-a Raspberry Pi 5 driving a TV. Two of the three original blockers are closed.
-Manual exposure, the setting macOS refused, works on Linux: at 2 ms a lit room
-reads luma 5, essentially black, and only the LED survives. What remains is the
-**beam angle**: the can still has to be pointed at the camera rather than painted
-with, and that is now understood to be the LED, not the camera or the software.
+**Status: it works.** A person picks up the can, points it at the TV, holds the
+button and paints. All three of the original blockers are closed — manual
+exposure, the LED's beam angle, and the Pi's power supply — and the Pi boots
+into the wall unattended.
 
-The parts to fix it are in hand but **not yet tested** — a single 850 nm emitter
-with a 120° beam replacing the pair of 940 nm indicators, a mono global-shutter
-camera, and a matching bandpass filter. The can has been remodelled around the
-new emitter. Nothing below marked "incoming" has been proven.
+It works on the *interim* optics: a modified C910 behind a strip of VHS tape.
+The mono global-shutter camera and the 850 nm bandpass filter are still in
+transit, and they are what will make it robust rather than merely working.
+Honest summary of where it stands:
+
+| | |
+|---|---|
+| Can: 850 nm, 120°, one emitter | ✅ tracks reliably at painting distance |
+| Power | ✅ 5 V/5 A negotiated, no throttling |
+| Tracker | ✅ 30 fps, 4.6× margin over threshold |
+| Wall app, calibration, painting | ✅ |
+| Controls usable with the can | ✅ colour, mode, size |
+| Boots into the wall by itself | ✅ user services, always ends at calibration |
+| Latency | ⚠️ ~150–250 ms, dominated by the C910's USB/MJPEG pipeline |
+| Mono camera + bandpass filter | ⏳ in transit, untested |
+| Usable cone angle | ⏳ never measured — `tools/pi/measure.py` is ready |
+| Multiple simultaneous users | ❌ unsolved, unscoped |
 
 ## Try it
 
@@ -40,6 +51,52 @@ open http://localhost:8731/test-wall.html
 
 Use `localhost`, not `file://` — `getUserMedia` only works in a secure context,
 which `localhost` and HTTPS satisfy and a local file does not.
+
+---
+
+## Running it on the Pi
+
+The Pi boots into the wall. Two systemd **user** services do it — user rather
+than system because the browser needs the compositor, and `WAYLAND_DISPLAY`
+only means anything inside the graphical session. The Pi autologins, so the
+session exists at boot and these come up with it. No `linger`, no `sudo`.
+
+```bash
+git clone https://github.com/bnhovde/ir-graffiti ~/ir-graffiti
+cd ~/ir-graffiti && ./tools/pi/install-pi.sh
+systemctl --user restart irtracker irkiosk
+```
+
+| | |
+|---|---|
+| `irtracker` | the tracker: camera, detection, WebSocket on :8765, HTTP on :8000 |
+| `irkiosk` | `start-kiosk.sh` — waits for the compositor, sets 720p, launches Chromium, connects it to the tracker, **starts calibration** |
+| logs | `~/ir-graffiti/tracker.log`, `~/ir-graffiti/kiosk.log` |
+
+**It always ends at the four corner targets.** The homography lives in the page,
+so every restart genuinely needs it redone — and a wall that looks alive but
+paints nothing is worse than one visibly asking to be calibrated.
+
+720p is set on every boot because `wlr-randr` does not persist, and because the
+resolution is the wall's frame rate: measured ~10 fps at 1440p, ~15 at 1080p and
+34+ at 720p. The cost is pure fill rate.
+
+### Driving it with no mouse or keyboard
+
+The exhibition Pi has neither, so [`tools/pi/kiosk.py`](tools/pi/kiosk.py) drives
+the page over the Chrome DevTools Protocol:
+
+```bash
+python3 tools/pi/kiosk.py --status          # tracker state, calibration, lock
+python3 tools/pi/kiosk.py --calibrate       # restart the 4-corner calibration
+python3 tools/pi/kiosk.py --latency         # end-to-end latency, while painting
+python3 tools/pi/kiosk.py 'app.clearCanvas()'
+```
+
+Also useful: `http://graffiti.local:8000/preview` is a live contrast-stretched
+camera view for aiming (a correctly exposed IR frame looks black to a human),
+and `/debug-pointer.html` shows just the tracked dot with a latency readout — no
+canvas, no painting, so it is the floor the wall can be compared against.
 
 ---
 
