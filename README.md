@@ -168,7 +168,7 @@ mattered. The C910 on a Pi is a genuinely usable camera.
 | **Body** | Logitech C910. USB 2.0 UVC, colour sensor, autofocus, ~78° diagonal field. Roughly 70° horizontal in 16:9, so lateral coverage is about 1.4 × distance. |
 | **IR-cut filter** | **Removed.** Physically taken out of the lens stack so the sensor can see near-IR at all. This shifts the focal plane — IR focuses differently from visible — so autofocus sits slightly wrong and is locked in software. |
 | **IR-pass filter** | **A strip of VHS tape over the front glass.** Improvised and the weakest optical element in the chain. Worth 2–8× to replace with real filter glass. |
-| **Exposure / gain** | **Manual, and it works.** `auto_exposure=1`, `exposure_time_absolute=20` (2 ms), `gain=8`, verified by readback. On macOS every one of these returned min 0 / max 0. |
+| **Exposure / gain** | **Manual, and it works.** `auto_exposure=1`, `exposure_time_absolute=60` (6 ms), `gain=128`, verified by readback. On macOS every one of these returned min 0 / max 0. See the settings finding below — 2 ms / gain 8 was wrong for this optical chain and capped the range. |
 | **Format** | **MJPEG, forced.** V4L2 hands back uncompressed YUYV by default and 720p of that exceeds USB 2.0 bandwidth, so the camera silently settles at 10 fps. Asking for MJPEG first gets 30. |
 | **Enumeration** | USB VID `0x046d`, PID `0x0821`. `/dev/video0` on the Pi. |
 
@@ -243,6 +243,48 @@ honours it.** This was the project's oldest blocker and the fix was to change
 host, not camera. At 2 ms with gain 8 the room reads luma 5 — near-black — which
 is exactly the intent: ambient accumulates with exposure time while the LED
 saturates almost instantly.
+
+### ✅ Settings, measured rather than assumed
+
+The working configuration for the modified C910 behind VHS tape:
+
+```
+exposure  6000 us (6 ms)      gain  128
+min_luma  25                  floor 12
+```
+
+Exposure sweep, LED at painting distance, gain 128:
+
+| exposure | sig | thr | result |
+|---|---|---|---|
+| 2 ms | 16.9 | 12.0 | no detection |
+| **6 ms** | **55.4** | 12.0 | **LOCKED** — 4.6× margin, threshold still on its floor |
+| 10 ms | 78.6 | 17.2 | locked, but margin flat |
+| 20 ms | 123.6 | 29.7 | locked, ambient now paying for it |
+
+Past 6 ms the adaptive threshold rises with the signal, so the margin stops
+improving and only the room light grows. Short exposure is still what rejects
+ambient — 6 ms is short — but **2 ms was dogma, not a measurement**, and it was
+carried for most of this project on the strength of the sentence above it.
+
+Two settings were quietly limiting range for weeks:
+
+- **`min_luma` is an ABSOLUTE pixel threshold**, so its meaning moves with gain
+  and exposure. It was set to 55 once, to kill false positives, and from then on
+  a blob had to exceed 55/255 no matter how the camera was configured. It should
+  sit just above sensor noise and let the adaptive threshold and the persistence
+  gating filter properly.
+- **`--gain` meant different things on the two backends** — an analogue
+  multiplier on picamera2, a 0–255 register on a UVC webcam — and shared one
+  default of 8.0. Sensible for picamera; very nearly nothing on a webcam. The
+  C910 ran at 8/255 for this entire project. Each backend now carries its own
+  default.
+
+Symptom to recognise: detection that works close up and **vanishes as a cliff**
+rather than fading. That is an absolute gate, not a weak emitter. Hours went into
+checking the LED, the batteries, the solder joints and the camera aim, all of
+which were fine, because a working measurement of `peak 66` against a gate of
+`55` was read as "working" rather than "20% from failing".
 
 ### ⚠️ Current blocker: the LED's beam, not the signal
 

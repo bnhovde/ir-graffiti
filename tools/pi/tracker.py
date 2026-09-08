@@ -152,6 +152,9 @@ class IRTracker:
 
 # --------------------------------------------------------------------- source
 class PiCamera:
+    DEFAULT_EXPOSURE_US = 2000        # global shutter behind a real filter
+    DEFAULT_GAIN = 8.0                # analogue multiplier
+
     def __init__(self, width, height, exposure_us=2000, gain=8.0, fps=60):
         from picamera2 import Picamera2
         self.cam = Picamera2()
@@ -244,8 +247,19 @@ class OpenCVCamera:
     adaptive threshold instead.
     """
 
+    # Measured on a modified C910 behind VHS tape, LED at painting distance:
+    #   2 ms  sig 16.9  thr 12.0  no detection
+    #   6 ms  sig 55.4  thr 12.0  LOCKED      <- 4.6x margin, thr still on floor
+    #  10 ms  sig 78.6  thr 17.2  LOCKED      <- signal up, margin flat
+    #  20 ms  sig 123.6 thr 29.7  LOCKED      <- ambient now paying for it
+    # Past 6 ms the adaptive threshold rises with the signal, so the margin stops
+    # improving and only the room light grows. Short exposure is still what
+    # rejects ambient - 6 ms is short - but 2 ms was dogma, not a measurement.
+    DEFAULT_EXPOSURE_US = 6000
+    DEFAULT_GAIN = 128                # 0-255 register, not a multiplier
+
     def __init__(self, width, height, fps=30, device=0,
-                 exposure_us=2000, gain=8.0, **_):
+                 exposure_us=6000, gain=128, **_):
         import cv2
         self.cv2 = cv2
         self.device = device
@@ -366,12 +380,22 @@ def parse_args():
     p.add_argument("--width", type=int, default=1280)
     p.add_argument("--height", type=int, default=800)
     p.add_argument("--fps", type=int, default=60)
-    p.add_argument("--exposure", type=int, default=2000,
+    # gain means different things on the two backends - an analogue multiplier
+    # on picamera2, a 0-255 sensor register on a UVC webcam - so there is no one
+    # default that suits both. 8.0 is a reasonable picamera gain and very nearly
+    # nothing on a webcam; leaving it shared meant the C910 ran at 8/255 for this
+    # entire project, which is what capped its range.
+    p.add_argument("--exposure", type=int, default=None,
                    help="microseconds. Short is the whole trick - 2000 is 2 ms")
-    p.add_argument("--gain", type=float, default=8.0)
+    p.add_argument("--gain", type=float, default=None)
     p.add_argument("--k", type=float, default=10.0, help="threshold, in sigmas")
-    p.add_argument("--floor", type=int, default=20)
-    p.add_argument("--min-luma", type=int, default=55)
+    p.add_argument("--floor", type=int, default=12)
+    # An ABSOLUTE pixel threshold, so its meaning moves with gain and exposure.
+    # It was 55, set once to kill false positives, and from then on it silently
+    # set the maximum range: a blob had to be brighter than 55/255 no matter how
+    # the camera was configured. Keep it just above sensor noise and let the
+    # adaptive threshold and the persistence gating do the real filtering.
+    p.add_argument("--min-luma", type=int, default=25)
     p.add_argument("--port", type=int, default=WS_PORT)
     p.add_argument("--serve", type=int, default=0,
                    help="also serve the repo over HTTP on this port, e.g. 8000")
@@ -499,10 +523,14 @@ async def run(args):
     Source = {"picamera": PiCamera, "webcam": OpenCVCamera,
               "synthetic": SyntheticCamera}[args.source]
     kw = {"fps": args.fps}
+    exposure = args.exposure if args.exposure is not None \
+        else getattr(Source, "DEFAULT_EXPOSURE_US", 2000)
+    gain = args.gain if args.gain is not None \
+        else getattr(Source, "DEFAULT_GAIN", 8.0)
     if args.source == "picamera":
-        kw.update(exposure_us=args.exposure, gain=args.gain)
+        kw.update(exposure_us=exposure, gain=gain)
     if args.source == "webcam":
-        kw.update(device=args.device, exposure_us=args.exposure, gain=args.gain)
+        kw.update(device=args.device, exposure_us=exposure, gain=gain)
     cam = Source(args.width, args.height, **kw)
     tracker = IRTracker(k=args.k, floor=args.floor, min_luma=args.min_luma)
     clients = set()
@@ -566,7 +594,7 @@ async def run(args):
         serve_http(args.serve, os.path.join(os.path.dirname(__file__), "..", ".."))
 
     print(f"camera {args.source} {args.width}x{args.height} @ {args.fps} fps, "
-          f"{args.exposure} us, gain {args.gain}")
+          f"{exposure} us, gain {gain}")
     print(f"ws     listening on :{args.port}")
     async with websockets.serve(handler, "", args.port):
         try:
