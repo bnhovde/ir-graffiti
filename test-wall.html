@@ -1387,7 +1387,12 @@ class PaintApp {
       // time in Blobs mode - clear only the region the cursor actually touched.
       // Any floaters or drips and we go back to clearing everything, because
       // then the layer genuinely is full-screen.
-      const heavy = ((this.theme.floaters && this.theme.floaters.length) || 0) +
+      // Anything a theme puts on the overlay counts, not just floaters:
+      // BlobsTheme animates liveStamps there for WRIGGLE_MS before baking them
+      // into the base canvas, and missing those left ghosts behind the stroke.
+      const t = this.theme;
+      const heavy = ((t.floaters && t.floaters.length) || 0) +
+                    ((t.liveStamps && t.liveStamps.length) || 0) +
                     ((this.drips && this.drips.length) || 0) > 0;
       if (heavy || this._ovFullDirty) {
         this.octx.clearRect(0, 0, this.vw, this.vh);
