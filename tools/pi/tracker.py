@@ -396,6 +396,15 @@ def parse_args():
     # the camera was configured. Keep it just above sensor noise and let the
     # adaptive threshold and the persistence gating do the real filtering.
     p.add_argument("--min-luma", type=int, default=25)
+    # Consecutive detections before a blob counts as a fix. This is PRESS
+    # LATENCY, paid on every button press: at 30 fps each frame here is 33 ms,
+    # and it was hard-coded at 3 - 100 ms - for the whole project. It exists to
+    # reject single-frame false positives, which mattered when the signal sat
+    # barely above threshold. With a 4.6x margin and a position stable to
+    # +/-0.005, 2 is plenty and 1 is worth trying.
+    p.add_argument("--lock-need", type=int, default=2,
+                   help="frames before a fix is reported. Each one costs 33 ms "
+                        "of latency between pressing the button and painting")
     p.add_argument("--port", type=int, default=WS_PORT)
     p.add_argument("--serve", type=int, default=0,
                    help="also serve the repo over HTTP on this port, e.g. 8000")
@@ -532,7 +541,8 @@ async def run(args):
     if args.source == "webcam":
         kw.update(device=args.device, exposure_us=exposure, gain=gain)
     cam = Source(args.width, args.height, **kw)
-    tracker = IRTracker(k=args.k, floor=args.floor, min_luma=args.min_luma)
+    tracker = IRTracker(k=args.k, floor=args.floor, min_luma=args.min_luma,
+                        lock_need=args.lock_need)
     clients = set()
 
     async def handler(ws):
