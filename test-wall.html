@@ -2512,7 +2512,9 @@ function closeAllDropdowns() {
   document.querySelectorAll('.theme-pill.open, .iconbtn.open').forEach(b => b.classList.remove('open'));
 }
 
-new PaintApp();
+window.app = new PaintApp();   // exposed for console tuning, and for
+                               // tools/pi/kiosk.py, which drives this page
+                               // over CDP - the Pi has no mouse or keyboard
 </script>
 </body>
 </html>
