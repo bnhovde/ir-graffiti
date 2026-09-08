@@ -1353,11 +1353,6 @@ function computeHomography(src, dst) {
   const [a, b, c, d, e, f, g, h] = sol;
   return { a, b, c, d, e, f, g, h };
 }
-function applyHomography(H, x, y) {
-  const denom = H.g * x + H.h * y + 1;
-  if (Math.abs(denom) < 1e-9) return [x, y];
-  return [(H.a * x + H.b * y + H.c) / denom, (H.d * x + H.e * y + H.f) / denom];
-}
 
 // Tracks the brightest hotspot in the frame — an IR-reflective marker, IR LED pen, or similar —
 // instead of color/shape. Works regardless of ambient light color, which is the point of using IR.
