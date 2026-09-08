@@ -112,18 +112,18 @@ nozzle_out    = 4.0;    // how far the nozzle spout stands proud of the cap
 pled_body_d   = 8.0;
 pled_dome_d   = 6.0;
 pled_dome_h   = 2.6;
+pled_ring     = 0.8;    // the forward-facing wall inside the nozzle: the ring
+                        // the tabs bear on, and the only material between the
+                        // LED and open air. Two perimeters at a 0.4 nozzle.
+                        // It no longer has anything to do with the body height
+                        // - it is just a stop - so it can be as thin as the
+                        // printer will hold. 0.6 works if yours is well tuned.
 pled_body_h   = 2.4;    // tab plane to the top of the body, dome excluded:
-                        // 5.0 total less the 2.6 dome. This sets the bore
-                        // depth, and so also the thickness of the ring the
-                        // tabs bear on.
-                        //
-                        // SET THIS TO THE SMALLEST BODY HEIGHT YOU BELIEVE,
-                        // never the largest. The error is not symmetric. Too
-                        // short and the body stands a little proud, which
-                        // costs nothing - the tabs still bear, and the dome is
-                        // still completely clear. Too long and the body sits
-                        // recessed, and then the bore clips the beam, which is
-                        // the whole thing this design exists to avoid.
+                        // 5.0 total less the 2.6 dome. NOT used by the
+                        // geometry any more, only to report how far the part
+                        // ends up standing out. Whatever it really is, the
+                        // body protrudes by (body height - pled_ring) and the
+                        // dome is clear regardless.
 pled_tab_w    = 1.5;    // tab width, across the slot (the 1.05 thickness runs
                         // along the bore, where the slot is long anyway)
 pled_tab_stag = 1.5;    // THE TABS ARE STAGGERED, not opposite each other: one
@@ -172,8 +172,9 @@ bsnap_r = 0.40;
 can_bore   = can_d - 2*wall;         // 56
 pled_pocket_d = pled_body_d + 0.2;   // 8.2 - press fit on the body
 pled_bore_d   = pled_dome_d + 0.5;   // 6.5 - dome clearance
-pled_bore_l   = pled_body_h;         // body sits flush, whole dome outside
-pled_tab_y    = cap_od/2 + nozzle_out - pled_body_h;   // where the tabs bear
+// Where the tabs bear, and so the front of the ring. This, not the bore
+// length, is what sets the thickness of the forward-facing wall.
+pled_tab_y    = cap_od/2 + nozzle_out - pled_ring;
 // Clear space under the disc: the chamber the emitter lies in, so it scales
 // with the pocket. The margin is 1.5, which puts the disc 0.5 above the seated
 // LED - the disc is what stops it lifting back out of its cradle - and keeps
@@ -546,8 +547,9 @@ else if (part == "button_disc") button_disc();
 else if (part == "bottom_cap")  bottom_cap();
 else if (part != "none")        layout_all();
 
-echo(str("LED: dome tip ", pled_dome_h, " + (body - ", pled_body_h,
-         ") proud of the face; front ring ", pled_body_h, " thick; tab slot ",
+echo(str("LED: body ", pled_body_h - pled_ring, " proud, dome tip ",
+         pled_body_h - pled_ring + pled_dome_h,
+         " proud of the face; front ring ", pled_ring, " thick; tab slot ",
          pled_tab_w + pled_tab_stag + 0.3, " tall x ", pled_tab_span + 0.4,
          " wide, bearing at y=", pled_tab_y, " on ",
          (nozzle_tip_d - pled_pocket_d)/2, " of ring; spout ", nozzle_tip_d,
