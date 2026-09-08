@@ -1,0 +1,123 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IR pointer — latency check</title>
+<!--
+  The smallest thing that can show tracker latency honestly.
+
+  No canvas, no painting, no compositing of full-screen layers: one <div> moved
+  with a transform, updated straight out of the socket handler rather than on an
+  animation frame. That makes this page a floor - whatever lag you can still see
+  here is the camera and the transport, not the wall app.
+
+  Compare against the wall to see what the app itself is adding.
+    keys:  s  smoothing on/off      m  mirror
+           t  trail on/off          h  hide the readout
+-->
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
+               font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #dot {
+    position: fixed; left: 0; top: 0; width: 46px; height: 46px; margin: -23px 0 0 -23px;
+    border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 2px #000a;
+    will-change: transform; pointer-events: none; opacity: 0;
+  }
+  #dot.on { opacity: 1; background: #fff2; }
+  #dot::after {
+    content: ''; position: absolute; inset: 20px; border-radius: 50%; background: #fff;
+  }
+  .trail {
+    position: fixed; left: 0; top: 0; width: 8px; height: 8px; margin: -4px 0 0 -4px;
+    border-radius: 50%; background: #4ade80; pointer-events: none; will-change: transform, opacity;
+  }
+  #hud {
+    position: fixed; left: 12px; top: 12px; color: #9ca3af; white-space: pre;
+    background: #000c; padding: 10px 14px; border: 1px solid #262626; border-radius: 8px;
+  }
+  #hud b { color: #e5e7eb; font-weight: 600; }
+  #hud .ok { color: #4ade80; } #hud .no { color: #f87171; }
+  #hud.hide { display: none; }
+</style>
+
+<div id="dot"></div>
+<div id="hud">connecting…</div>
+
+<script>
+const dot = document.getElementById('dot'), hud = document.getElementById('hud');
+let smooth = false, mirror = false, trail = false;
+let ex = null, ey = null;              // smoothed position, when enabled
+const ALPHA = 0.5;
+
+const lat = [];                        // recent end-to-end latencies, ms
+let msgs = 0, fixes = 0, lastRate = performance.now(), rate = 0, locked = false;
+let state = 'connecting';
+
+function put(nx, ny) {
+  let x = mirror ? 1 - nx : nx;
+  if (smooth) {
+    ex = ex === null ? x  : ex + (x  - ex) * ALPHA;
+    ey = ey === null ? ny : ey + (ny - ey) * ALPHA;
+    x = ex; ny = ey;
+  } else { ex = x; ey = ny; }
+  const px = x * innerWidth, py = ny * innerHeight;
+  // translate3d, set straight from the socket handler: the value is already in
+  // place when the compositor next runs, which is as early as it can be.
+  dot.style.transform = `translate3d(${px}px, ${py}px, 0)`;
+  if (trail) spawnTrail(px, py);
+}
+
+function spawnTrail(px, py) {
+  const d = document.createElement('div');
+  d.className = 'trail';
+  d.style.transform = `translate3d(${px}px, ${py}px, 0)`;
+  document.body.appendChild(d);
+  d.animate([{ opacity: .9 }, { opacity: 0 }], { duration: 900, fill: 'forwards' })
+   .finished.then(() => d.remove(), () => d.remove());
+}
+
+function connect() {
+  const url = `ws://${location.hostname || 'graffiti.local'}:8765`;
+  state = 'connecting';
+  const ws = new WebSocket(url);
+  ws.onopen  = () => { state = 'live'; };
+  ws.onclose = () => { state = 'closed'; locked = false; dot.classList.remove('on');
+                       setTimeout(connect, 1000); };
+  ws.onerror = () => { state = 'error'; };
+  ws.onmessage = ev => {
+    msgs++;
+    let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m.t) { lat.push(Date.now() - m.t); if (lat.length > 120) lat.shift(); }
+    if (m.lost || typeof m.x !== 'number') {
+      locked = false; dot.classList.remove('on'); ex = ey = null; return;
+    }
+    fixes++; locked = true; dot.classList.add('on');
+    put(m.x, m.y);
+  };
+}
+connect();
+
+// The readout is deliberately off the hot path - it updates on a timer, not per
+// message, so measuring the thing cannot slow the thing.
+setInterval(() => {
+  const now = performance.now();
+  rate = Math.round(msgs / ((now - lastRate) / 1000));
+  msgs = 0; lastRate = now;
+  const s = [...lat].sort((a, b) => a - b);
+  const q = f => s.length ? s[Math.min(s.length - 1, Math.floor(s.length * f))] : '–';
+  hud.innerHTML =
+    `<b>${state}</b>  ${locked ? '<span class="ok">LOCKED</span>' : '<span class="no">no fix</span>'}\n` +
+    `latency   p50 <b>${q(.5)}</b> ms   p90 ${q(.9)} ms\n` +
+    `msgs/s    ${rate}\n` +
+    `smoothing ${smooth ? 'on (a=' + ALPHA + ')' : '<b>off</b>'}   mirror ${mirror ? 'on' : 'off'}   trail ${trail ? 'on' : 'off'}\n` +
+    `\ns smoothing · m mirror · t trail · h hide`;
+}, 500);
+
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 's') { smooth = !smooth; ex = ey = null; }
+  else if (k === 'm') mirror = !mirror;
+  else if (k === 't') trail = !trail;
+  else if (k === 'h') hud.classList.toggle('hide');
+});
+</script>
