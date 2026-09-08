@@ -18,10 +18,14 @@ CDP = "http://localhost:9222"
 
 async def evaluate(expr, timeout=30):
     targets = json.load(urllib.request.urlopen(f"{CDP}/json"))
+    # Any page the kiosk is serving, not just the wall: the debug pointer page
+    # has to be drivable too, and on a machine with no keyboard this is the only
+    # way to press a key at all.
     page = next((t for t in targets
-                 if t["type"] == "page" and "test-wall" in t["url"]), None)
+                 if t["type"] == "page" and "localhost:8000" in t["url"]), None) \
+        or next((t for t in targets if t["type"] == "page"), None)
     if not page:
-        sys.exit("no test-wall page target - is the kiosk browser running?")
+        sys.exit("no page target - is the kiosk browser running?")
     async with websockets.connect(page["webSocketDebuggerUrl"],
                                   max_size=None, open_timeout=10) as ws:
         await ws.send(json.dumps({
