@@ -115,7 +115,11 @@
     background:rgba(0,0,0,0.34);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);
   }
   #menu.show{display:flex;}
-  #menu-row{display:flex;gap:calc(34px * var(--ui));align-items:center;}
+  /* Wraps because the targets scale with --ui: five size circles at 1.5 are
+     wider than a 720p screen, and a menu item you cannot reach is worse than
+     one on a second row. */
+  #menu-row{display:flex;gap:calc(34px * var(--ui));align-items:center;
+    flex-wrap:wrap;justify-content:center;max-width:94vw;}
   .mi{
     min-width:calc(168px * var(--ui));height:calc(168px * var(--ui));
     border-radius:calc(84px * var(--ui));
@@ -563,6 +567,10 @@ const SECRET = [
   { label: 'Reload',    run: () => location.reload() },
   { label: 'Friedolin', run: w => w.stencil ? w.exitStencil() : w.enterStencil() },
   { label: 'Sound',     run: w => w.toggleMute() },
+  // Label reflects what it will DO, so the menu is readable without knowing
+  // the current state - there is no cursor to hover and nothing else to read.
+  { label: w => (w.uiScale > 1.2 ? 'UI normal' : 'UI bigger'),
+    run: w => w.setUiScale(w.uiScale > 1.2 ? 1 : 1.5) },
 ];
 
 /* -------------------------------------------------------------- stencil
@@ -871,7 +879,8 @@ class Wall {
   openMenu(kind) {
     const row = document.getElementById('menu-row');
     row.innerHTML = '';
-    const items = kind === 'secret' ? SECRET.map(a => ({ text: a.label }))
+    const items = kind === 'secret'
+      ? SECRET.map(a => ({ text: typeof a.label === 'function' ? a.label(this) : a.label }))
       : kind === 'color' ? this.theme.colors.map(c => ({ bg: c }))
       : kind === 'mode' ? THEME_ORDER.map(id => ({ text: THEMES[id].label }))
       : SIZES.map(v => ({ size: Math.round(14 + v * 46) }));
