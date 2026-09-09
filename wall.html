@@ -603,7 +603,11 @@ class Wall {
     this.dwell = 0; this.dwellOn = null; this.fired = false;
     this.drips = [];
     this.stencil = null;
-    this.muted = !!localStorage.getItem('muted');
+    // Off by default: a gallery is quiet, and there is no keyboard to reach
+    // for if it turns out to be too much. localStorage stores the CHOICE, so
+    // an explicit "on" survives a reboot but the default does not drift.
+    const pref = localStorage.getItem('muted');
+    this.muted = pref === null ? true : pref === '1';
     this.menu = null;
     this.lastT = 0;
 
@@ -785,7 +789,7 @@ class Wall {
   toggleMute() {
     this.muted = !this.muted;
     if (this.muted) this.sprayOff();
-    try { localStorage.setItem('muted', this.muted ? '1' : ''); } catch (e) {}
+    try { localStorage.setItem('muted', this.muted ? '1' : '0'); } catch (e) {}
     this.status(this.muted ? 'sound off' : 'sound on');
     setTimeout(() => this.status(''), 1500);
   }
