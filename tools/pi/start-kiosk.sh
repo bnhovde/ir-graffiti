@@ -41,6 +41,7 @@ chromium \
     --password-store=basic --use-mock-keychain \
     --noerrdialogs --disable-infobars --disable-session-crashed-bubble \
     --no-first-run --disable-features=Translate \
+    --autoplay-policy=no-user-gesture-required \
     --remote-debugging-port=9222 --remote-allow-origins='*' \
     --user-data-dir="$HOME/.config/chromium-kiosk" \
     "$URL" &

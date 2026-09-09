@@ -281,6 +281,7 @@ const THEMES = {
   ink: {
     label: 'Ink Wall',
     bg: '#f2ede1',
+    mirror: true,               // the original mirrored ink about the centre
     colors: ['#141210', '#4a2f1c', '#232c4d', '#5c1a1a'],
     radius: s => 17 * s,
     drip: { chance: 0.05, len: [25, 120], w: 0.30, alpha: 0.85, speed: 1.6, blend: 'multiply' },
@@ -498,6 +499,7 @@ const SECRET = [
   { label: 'Calibrate', run: w => w.beginCalibration() },
   { label: 'Reload',    run: () => location.reload() },
   { label: 'Friedolin', run: w => w.stencil ? w.exitStencil() : w.enterStencil() },
+  { label: 'Sound',     run: w => w.toggleMute() },
 ];
 
 /* -------------------------------------------------------------- stencil
@@ -539,6 +541,7 @@ class Wall {
     this.dwell = 0; this.dwellOn = null; this.fired = false;
     this.drips = [];
     this.stencil = null;
+    this.muted = !!localStorage.getItem('muted');
     this.menu = null;
     this.lastT = 0;
 
@@ -663,6 +666,59 @@ class Wall {
     ctx.setTransform(1, 0, 0, 1, 0, 0);      // clip is in device space; keep it
     fn(ctx);
     ctx.restore();
+  }
+
+  /* ---- spray hiss ----
+     Filtered white noise, as the original: one looping buffer feeding a
+     highpass into a bandpass. It lives on the audio thread, so the main thread
+     only ever nudges three parameters - level from speed, pan from x, and
+     brightness from height and speed. Built lazily on the first stroke because
+     browsers refuse an AudioContext before user interaction. */
+  ensureAudio() {
+    if (this.muted) return;
+    if (this.actx) { if (this.actx.state === 'suspended') this.actx.resume(); return; }
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ac = new AC();
+      this.actx = ac;
+      const master = ac.createGain(); master.gain.value = 0.75; master.connect(ac.destination);
+      const len = Math.floor(ac.sampleRate * 2);
+      const buf = ac.createBuffer(1, len, ac.sampleRate);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1;
+      const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
+      const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1400;
+      const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 5200; bp.Q.value = 0.7;
+      this.sprayBp = bp;
+      this.sprayGain = ac.createGain(); this.sprayGain.gain.value = 0;
+      this.sprayPan = ac.createStereoPanner ? ac.createStereoPanner() : null;
+      src.connect(hp); hp.connect(bp); bp.connect(this.sprayGain);
+      let node = this.sprayGain;
+      if (this.sprayPan) { this.sprayGain.connect(this.sprayPan); node = this.sprayPan; }
+      node.connect(master);
+      src.start();
+    } catch (e) { this.actx = null; }
+  }
+  updateSpray(x, y, speed) {
+    if (!this.actx || !this.sprayGain || this.muted) return;
+    const t = this.actx.currentTime;
+    this.sprayGain.gain.setTargetAtTime(Math.min(0.55, 0.16 + speed * 0.028), t, 0.02);
+    if (this.sprayPan)
+      this.sprayPan.pan.setTargetAtTime(Math.max(-1, Math.min(1, x / this.vw * 2 - 1)), t, 0.04);
+    if (this.sprayBp)
+      this.sprayBp.frequency.setTargetAtTime(
+        4000 + Math.max(0, Math.min(1, 1 - y / this.vh)) * 3400 + Math.min(speed * 40, 1200), t, 0.05);
+  }
+  sprayOff() {
+    if (!this.actx || !this.sprayGain) return;
+    this.sprayGain.gain.setTargetAtTime(0.0001, this.actx.currentTime, 0.06);
+  }
+  toggleMute() {
+    this.muted = !this.muted;
+    if (this.muted) this.sprayOff();
+    try { localStorage.setItem('muted', this.muted ? '1' : ''); } catch (e) {}
+    this.status(this.muted ? 'sound off' : 'sound on');
+    setTimeout(() => this.status(''), 1500);
   }
 
   status(msg) { document.getElementById('status').textContent = msg || ''; }
@@ -805,11 +861,21 @@ class Wall {
   }
 
   /* ---- painting ---- */
+  paintSeg(x0, y0, x1, y1) {
+    const col = this.theme.colors[this.color], r = this.radius();
+    this.masked(c => {
+      this.theme.paint(c, x0, y0, x1, y1, r, col);
+      // Mirrored about the vertical centre, in canvas space, so it works with
+      // the stencil and at any resolution.
+      if (this.theme.mirror)
+        this.theme.paint(c, this.vw - x0, y0, this.vw - x1, y1, r, col);
+    });
+  }
   down(id, x, y) {
     const p = this.toCanvas(x, y);
     this.pointers.set(id, p);
-    this.masked(c => this.theme.paint(c, p.x, p.y, p.x, p.y, this.radius(),
-                                      this.theme.colors[this.color]));
+    this.ensureAudio();
+    this.paintSeg(p.x, p.y, p.x, p.y);
   }
   move(id, x, y) {
     const p = this.toCanvas(x, y), prev = this.pointers.get(id);
@@ -820,10 +886,10 @@ class Wall {
     // frogs merged into a smear whenever the pointer reported frequently.
     const min = (this.theme.minStep || 0) * this.radius();
     if (min && Math.hypot(p.x - prev.x, p.y - prev.y) < min) return;
-    this.masked(c => this.theme.paint(c, prev.x, prev.y, p.x, p.y, this.radius(),
-                                      this.theme.colors[this.color]));
+    this.paintSeg(prev.x, prev.y, p.x, p.y);
     this.pointers.set(id, p);
     this.maybeDrip(p.x, p.y);
+    this.updateSpray(p.x, p.y, Math.hypot(p.x - prev.x, p.y - prev.y));
   }
 
   // A drip GROWS - it never moves - so it can be drawn straight into the
@@ -833,15 +899,19 @@ class Wall {
   maybeDrip(x, y) {
     const d = this.theme.drip;
     if (!d || this.drips.length >= 40 || Math.random() > d.chance) return;
+    if (this.theme.mirror) this.drips.push(this.makeDrip(this.vw - x, y, d));
+    this.drips.push(this.makeDrip(x, y, d));
+  }
+  makeDrip(x, y, d) {
     const r = this.radius();
-    this.drips.push({
+    return {
       x, y, len: 0,
       target: d.len[0] + Math.random() * (d.len[1] - d.len[0]),
       w: r * d.w * (0.7 + Math.random() * 0.6),
       speed: d.speed * (0.7 + Math.random() * 0.7),
       color: this.theme.colors[this.color],
       alpha: d.alpha, blend: d.blend || 'source-over',
-    });
+    };
   }
   growDrips() { this.masked(ctx => this.growDripsIn(ctx)); }
   growDripsIn(ctx) {
@@ -870,7 +940,7 @@ class Wall {
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }
-  up(id) { this.pointers.delete(id); }
+  up(id) { this.pointers.delete(id); if (!this.pointers.size) this.sprayOff(); }
 
   /* ---- input: cans ---- */
   loop(t) {
