@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Spraycollective — Wall</title>
+<!--
+  The wall, rebuilt for speed.
+
+  test-wall.html measured 60 fps idle and 24 fps while painting on a Pi 5 at
+  720p, and every one of those losses was structural rather than a tuning
+  mistake, so they are designed out here rather than optimised away:
+
+    * ONE canvas, and it is never cleared. Strokes are baked in and stay.
+      The old build stacked three full-screen canvases and cleared the top one
+      every frame to draw a cursor - which forces the compositor to re-upload
+      ~3.7 MB per frame. Hiding that one layer doubled the frame rate.
+    * The cursor is a DOM element moved with a transform. GPU-composited, no
+      texture upload, no canvas involvement. This is why debug-pointer.html
+      felt instant while the wall did not.
+    * Nothing animates on its own. There is no render loop when idle: the
+      canvas is touched only when a pointer moves.
+    * Brush stamps are pre-rendered once into a small offscreen canvas and
+      blitted. The old brush built radial gradients per stamp and re-drew
+      every live stamp for 260 ms, which cost 60 -> 24 fps by itself.
+    * The backing store is capped at 1x regardless of devicePixelRatio. On a
+      retina Mac that alone is a 4x saving in fill rate.
+
+  UI scale is independent of canvas resolution: --ui scales the chrome without
+  touching paint resolution or frame rate. On a 65" TV at 720p the controls
+  are physically huge at scale 1; the paint detail is unaffected either way.
+-->
+<style>
+  :root{
+    --ui: 1;                    /* chrome scale, independent of render scale */
+    --bg: #f4f4f2;
+    --btn-bg: rgba(255,255,255,0.92);
+    --btn-border: rgba(0,0,0,0.10);
+    --fg: #161616;
+    --sel: #161616;
+    --danger: #e5484d;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);
+    font-family:'Space Grotesk',system-ui,-apple-system,sans-serif;color:var(--fg);
+    -webkit-user-select:none;user-select:none;touch-action:none;}
+
+  #paint{position:fixed;inset:0;display:block;}
+
+  /* Cursors: DOM, not canvas. Moving a transform is compositor-only work. */
+  .cursor{
+    position:fixed;left:0;top:0;pointer-events:none;border-radius:50%;
+    border:2px solid rgba(255,255,255,0.95);box-shadow:0 0 0 2px rgba(0,0,0,0.35);
+    will-change:transform;
+  }
+  .cursor::after{content:'';position:absolute;inset:calc(50% - 2px);border-radius:50%;
+    background:rgba(255,255,255,0.95);}
+
+  /* ---- chrome, all sized off --ui ---- */
+  .bar{
+    position:fixed;z-index:6;display:flex;align-items:center;
+    gap:calc(10px * var(--ui));
+  }
+  #bottom{left:calc(26px * var(--ui));bottom:calc(22px * var(--ui));}
+  #top{right:calc(26px * var(--ui));top:calc(20px * var(--ui));}
+
+  .pill{
+    display:flex;align-items:center;justify-content:center;position:relative;
+    gap:calc(12px * var(--ui));
+    height:calc(66px * var(--ui));min-width:calc(66px * var(--ui));
+    padding:0 calc(24px * var(--ui));
+    border-radius:calc(34px * var(--ui));
+    border:1px solid var(--btn-border);background:var(--btn-bg);
+    box-shadow:0 4px 14px rgba(0,0,0,0.10);
+    font-weight:600;font-size:calc(19px * var(--ui));cursor:pointer;
+  }
+  .pill.icon{padding:0;width:calc(66px * var(--ui));}
+  .pill svg{width:calc(24px * var(--ui));height:calc(24px * var(--ui));}
+
+  /* The dwell ring: fills while a can rests on a control. */
+  .pill::after{
+    content:'';position:absolute;inset:calc(-6px * var(--ui));border-radius:inherit;
+    pointer-events:none;opacity:0;
+    background:conic-gradient(var(--sel) calc(var(--arm,0) * 1turn),transparent 0);
+    -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 0);
+    mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 0);
+  }
+  .pill.arming::after{opacity:1;}
+  .pill.danger.arming::after{background:conic-gradient(var(--danger) calc(var(--arm,0) * 1turn),transparent 0);}
+
+  .sw{width:calc(42px * var(--ui));height:calc(42px * var(--ui));border-radius:50%;
+    outline:calc(3px * var(--ui)) solid transparent;outline-offset:calc(3px * var(--ui));}
+  .sw.on{outline-color:var(--sel);}
+  .dot{border-radius:50%;background:var(--fg);opacity:0.28;}
+  .dot.on{opacity:1;outline:calc(3px * var(--ui)) solid var(--sel);
+    outline-offset:calc(3px * var(--ui));}
+
+  /* ---- big menu: the can's only fine control is where it points ---- */
+  #menu{
+    position:fixed;inset:0;z-index:40;display:none;align-items:center;justify-content:center;
+    background:rgba(0,0,0,0.34);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);
+  }
+  #menu.show{display:flex;}
+  #menu-row{display:flex;gap:calc(34px * var(--ui));align-items:center;}
+  .mi{
+    min-width:calc(168px * var(--ui));height:calc(168px * var(--ui));
+    border-radius:calc(84px * var(--ui));
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+    outline:calc(5px * var(--ui)) solid transparent;outline-offset:calc(10px * var(--ui));
+    box-shadow:0 6px 22px rgba(0,0,0,0.35);
+    transition:transform .12s ease,outline-color .12s ease;
+  }
+  .mi.on{transform:scale(1.14);outline-color:#fff;}
+  .mi.size{background:#fff;}
+  .hint{position:absolute;bottom:12%;color:#fff;opacity:.92;
+    font-weight:600;font-size:calc(15px * var(--ui));}
+
+  /* ---- calibration ---- */
+  #cal{position:fixed;inset:0;z-index:50;display:none;background:#111;color:#fff;}
+  #cal.show{display:block;}
+  #cal .target{position:fixed;width:calc(120px * var(--ui));height:calc(120px * var(--ui));
+    margin:calc(-60px * var(--ui)) 0 0 calc(-60px * var(--ui));
+    border-radius:50%;border:calc(4px * var(--ui)) solid #fff;opacity:.25;}
+  #cal .target.on{opacity:1;box-shadow:0 0 0 calc(8px * var(--ui)) rgba(255,255,255,.18);}
+  #cal .msg{position:fixed;left:0;right:0;top:46%;text-align:center;
+    font-weight:600;font-size:calc(22px * var(--ui));}
+  #cal .sub{position:fixed;left:0;right:0;top:53%;text-align:center;opacity:.7;
+    font-size:calc(15px * var(--ui));}
+
+  #status{position:fixed;left:calc(26px * var(--ui));top:calc(20px * var(--ui));z-index:6;
+    font-size:calc(13px * var(--ui));opacity:.55;}
+</style>
+</head>
+<body>
+
+<canvas id="paint"></canvas>
+<div id="cursors"></div>
+<div id="status"></div>
+
+<div id="bottom" class="bar">
+  <div id="colors" class="pill"></div>
+  <div id="sizes" class="pill"></div>
+</div>
+
+<div id="top" class="bar">
+  <div id="clear" class="pill icon danger" title="Hold to clear">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M5 7h14M10 11v6M14 11v6M6.5 7l.7 12a1.5 1.5 0 0 0 1.5 1.4h6.6a1.5 1.5 0 0 0 1.5-1.4l.7-12M9.5 7V5.6A1.6 1.6 0 0 1 11 4h2a1.6 1.6 0 0 1 1.5 1.6V7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </div>
+</div>
+
+<div id="menu"><div id="menu-row"></div><div class="hint">Move to choose · release to pick</div></div>
+
+<div id="cal">
+  <div class="msg" id="cal-msg">Calibration</div>
+  <div class="sub" id="cal-sub">Point at the ring and hold the button</div>
+</div>
+
+<script>
+'use strict';
+
+/* ------------------------------------------------------------------ config */
+const COLORS = ['#ff6b35', '#f7d038', '#e84a8a', '#1e88e5'];
+const SIZES  = [0.6, 0.85, 1.1, 1.45, 1.8];
+// Cap the backing store at 1x. The Pi is 1x anyway; a retina Mac would
+// otherwise render four times the pixels for no visible gain on spray paint.
+const RENDER_SCALE = 1;
+const DWELL_MENU = 900;      // ms resting on a control before its menu opens
+const DWELL_CLEAR = 1800;    // clear wipes the wall, so it wants a real hold
+const STALE_MS = 300;        // no fix for this long = pen up
+
+/* -------------------------------------------------------------- homography */
+function solveHomography(src, dst) {
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = src[i], [X, Y] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -X * x, -X * y]); b.push(X);
+    A.push([0, 0, 0, x, y, 1, -Y * x, -Y * y]); b.push(Y);
+  }
+  for (let c = 0; c < 8; c++) {
+    let piv = c;
+    for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[piv][c])) piv = r;
+    if (Math.abs(A[piv][c]) < 1e-9) return null;        // collinear
+    [A[c], A[piv]] = [A[piv], A[c]];
+    [b[c], b[piv]] = [b[piv], b[c]];
+    for (let r = 0; r < 8; r++) {
+      if (r === c) continue;
+      const f = A[r][c] / A[c][c];
+      for (let k = c; k < 8; k++) A[r][k] -= f * A[c][k];
+      b[r] -= f * b[c];
+    }
+  }
+  const h = b.map((v, i) => v / A[i][i]);
+  return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
+}
+function applyHomography(H, x, y) {
+  const w = H[6] * x + H[7] * y + H[8];
+  if (Math.abs(w) < 1e-9) return null;
+  return { x: (H[0] * x + H[1] * y + H[2]) / w, y: (H[3] * x + H[4] * y + H[5]) / w };
+}
+
+/* ------------------------------------------------------------------ brush */
+// One soft dot, rendered once per colour and reused for every stamp. Building
+// a radial gradient per stamp is what made the old brush cost 25 ms a frame.
+const stampCache = new Map();
+function stamp(color) {
+  let c = stampCache.get(color);
+  if (c) return c;
+  const R = 64;
+  c = document.createElement('canvas');
+  c.width = c.height = R * 2;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(R, R, 0, R, R, R);
+  grad.addColorStop(0.00, color);
+  grad.addColorStop(0.55, color);
+  grad.addColorStop(1.00, color + '00');
+  g.fillStyle = grad;
+  g.beginPath(); g.arc(R, R, R, 0, 6.2832); g.fill();
+  stampCache.set(color, c);
+  return c;
+}
+
+class Brush {
+  constructor(ctx) { this.ctx = ctx; this.color = COLORS[0]; this.scale = 1; }
+  radius() { return 26 * this.scale; }
+
+  // Stamp along the segment so a fast hand still leaves a continuous line.
+  // Everything is baked immediately: nothing is kept alive to redraw later.
+  stroke(x0, y0, x1, y1) {
+    const ctx = this.ctx, img = stamp(this.color);
+    const r = this.radius();
+    const dx = x1 - x0, dy = y1 - y0;
+    const dist = Math.hypot(dx, dy);
+    const step = Math.max(2, r * 0.34);
+    const n = Math.max(1, Math.ceil(dist / step));
+    ctx.globalAlpha = 0.30;
+    for (let i = 1; i <= n; i++) {
+      const t = i / n;
+      const x = x0 + dx * t, y = y0 + dy * t;
+      this.blot(ctx, img, x, y, r);
+      // Overspray: a few smaller flecks, placed once and left alone.
+      if (Math.random() < 0.55) {
+        const a = Math.random() * 6.2832, d = r * (0.6 + Math.random() * 0.9);
+        this.blot(ctx, img, x + Math.cos(a) * d, y + Math.sin(a) * d,
+                  r * (0.18 + Math.random() * 0.30));
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+  blot(ctx, img, x, y, r) { ctx.drawImage(img, x - r, y - r, r * 2, r * 2); }
+  dot(x, y) {
+    const ctx = this.ctx;
+    ctx.globalAlpha = 0.30;
+    this.blot(ctx, stamp(this.color), x, y, this.radius());
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* ----------------------------------------------------------------- tracker */
+// Multiple spots, one per can. Ids come from the tracker, which matches spots
+// between frames; when two cans cross the ids swap, which is invisible while
+// everyone paints with the same brush.
+class Tracker {
+  constructor() {
+    this.blobs = []; this.at = 0; this.state = 'idle';
+    this.homography = null; this.url = ''; this.onstate = null;
+  }
+  get calibrated() { return !!this.homography; }
+
+  connect(url) {
+    this.disconnect();
+    this.url = url; this.want = true; this.open();
+  }
+  open() {
+    this.set('connecting');
+    try { this.ws = new WebSocket(this.url); }
+    catch (e) { this.set('error'); return this.retry(); }
+    this.ws.onopen = () => this.set('live');
+    this.ws.onclose = () => { if (this.want) { this.blobs = []; this.set('error'); this.retry(); } };
+    this.ws.onerror = () => this.set('error');
+    this.ws.onmessage = ev => this.handle(ev.data);
+  }
+  // The Pi restarts its tracker on failure, so the socket comes back on its
+  // own; a page that gave up would need someone to notice from across a room.
+  retry() { clearTimeout(this.t); if (this.want) this.t = setTimeout(() => this.open(), 1500); }
+  disconnect() {
+    this.want = false; clearTimeout(this.t);
+    if (this.ws) { const w = this.ws; this.ws = null; try { w.close(); } catch (e) {} }
+    this.blobs = []; this.set('idle');
+  }
+  set(s) { this.state = s; if (this.onstate) this.onstate(s); }
+
+  handle(raw) {
+    let m; try { m = JSON.parse(raw); } catch (e) { return; }
+    if (m.lost || typeof m.x !== 'number') { this.blobs = []; return; }
+    this.blobs = (m.blobs && m.blobs.length ? m.blobs : [{ id: 0, x: m.x, y: m.y, area: m.area }])
+      .map(b => ({ id: b.id | 0, x: b.x, y: b.y, area: b.area || 0 }));
+    this.at = performance.now();
+  }
+  // A dead feed must lift the pen, not freeze the cursor where it was - that
+  // would paint a permanent blob if the Pi went away mid-stroke.
+  raw() {
+    if (!this.blobs.length) return [];
+    if (performance.now() - this.at > STALE_MS) { this.blobs = []; return []; }
+    return this.blobs;
+  }
+  screen(w, h) {
+    if (!this.homography) return [];
+    const out = [], m = 0.15;
+    for (const b of this.raw()) {
+      const p = applyHomography(this.homography, b.x, b.y);
+      if (!p || p.x < -m || p.x > 1 + m || p.y < -m || p.y > 1 + m) continue;
+      out.push({ id: b.id, x: p.x * w, y: p.y * h });
+    }
+    return out;
+  }
+}
+
+/* --------------------------------------------------------------------- app */
+class Wall {
+  constructor() {
+    this.canvas = document.getElementById('paint');
+    this.ctx = this.canvas.getContext('2d', { alpha: false });
+    this.brush = new Brush(this.ctx);
+    this.tracker = new Tracker();
+    this.pointers = new Map();     // id -> {x, y}
+    this.cursors = new Map();      // id -> element
+    this.color = 0; this.size = 2;
+    this.brush.scale = SIZES[this.size];
+    this.dwell = 0; this.dwellOn = null; this.fired = false;
+    this.menu = null;
+    this.lastT = 0;
+
+    this.resize();
+    addEventListener('resize', () => this.resize());
+    this.buildControls();
+    this.wireMouse();
+    this.setUiScale(+(localStorage.getItem('uiScale') || 1) || 1);
+
+    this.tracker.onstate = s => this.status(
+      s === 'live' ? (this.tracker.calibrated ? '' : 'connected — calibrating…')
+      : s === 'connecting' ? 'connecting…'
+      : s === 'error' ? 'tracker lost — retrying…' : '');
+
+    // Nothing runs when idle. The loop only exists while the tracker is live.
+    this.loop = this.loop.bind(this);
+    requestAnimationFrame(this.loop);
+  }
+
+  /* ---- canvas ---- */
+  resize() {
+    const w = Math.round(innerWidth * RENDER_SCALE), h = Math.round(innerHeight * RENDER_SCALE);
+    if (this.canvas.width === w && this.canvas.height === h) return;
+    // Preserve what is painted: the canvas is the document, and resizing it
+    // would otherwise wipe the wall.
+    let keep = null;
+    if (this.canvas.width) {
+      keep = document.createElement('canvas');
+      keep.width = this.canvas.width; keep.height = this.canvas.height;
+      keep.getContext('2d').drawImage(this.canvas, 0, 0);
+    }
+    this.canvas.width = w; this.canvas.height = h;
+    this.canvas.style.width = innerWidth + 'px';
+    this.canvas.style.height = innerHeight + 'px';
+    this.ctx.fillStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue('--bg').trim() || '#f4f4f2';
+    this.ctx.fillRect(0, 0, w, h);
+    if (keep) this.ctx.drawImage(keep, 0, 0, w, h);
+    this.vw = w; this.vh = h;
+  }
+  clear() {
+    this.ctx.fillStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue('--bg').trim() || '#f4f4f2';
+    this.ctx.fillRect(0, 0, this.vw, this.vh);
+  }
+  toCanvas(x, y) { return { x: x * RENDER_SCALE, y: y * RENDER_SCALE }; }
+
+  /* ---- ui scale, independent of render resolution ---- */
+  setUiScale(v) {
+    this.uiScale = Math.min(2, Math.max(0.4, v));
+    document.documentElement.style.setProperty('--ui', this.uiScale);
+    try { localStorage.setItem('uiScale', String(this.uiScale)); } catch (e) {}
+  }
+
+  status(msg) { document.getElementById('status').textContent = msg || ''; }
+
+  /* ---- controls ---- */
+  buildControls() {
+    const cw = document.getElementById('colors');
+    cw.innerHTML = '';
+    COLORS.forEach((c, i) => {
+      const d = document.createElement('div');
+      d.className = 'sw' + (i === this.color ? ' on' : '');
+      d.style.background = c;
+      cw.appendChild(d);
+    });
+    const sw = document.getElementById('sizes');
+    sw.innerHTML = '';
+    SIZES.forEach((v, i) => {
+      const d = document.createElement('i');
+      d.className = 'dot' + (i === this.size ? ' on' : '');
+      const px = 7 + v * 13;
+      d.style.width = `calc(${px}px * var(--ui))`;
+      d.style.height = `calc(${px}px * var(--ui))`;
+      sw.appendChild(d);
+    });
+  }
+  setColor(i) { this.color = i; this.brush.color = COLORS[i]; this.buildControls(); }
+  setSize(i) { this.size = i; this.brush.scale = SIZES[i]; this.buildControls(); }
+
+  targets() {
+    return [['color', 'colors'], ['size', 'sizes'], ['clear', 'clear']];
+  }
+  targetAt(x, y) {
+    const pad = 46 * this.uiScale;
+    for (const [kind, id] of this.targets()) {
+      const el = document.getElementById(id);
+      const r = el.getBoundingClientRect();
+      if (x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad)
+        return { kind, el };
+    }
+    return null;
+  }
+  arm(frac, el) {
+    for (const [, id] of this.targets()) {
+      const t = document.getElementById(id);
+      const on = frac > 0 && t === el;
+      t.classList.toggle('arming', on);
+      t.style.setProperty('--arm', on ? Math.min(1, frac).toFixed(3) : '0');
+    }
+  }
+
+  /* ---- big menu ---- */
+  openMenu(kind) {
+    const row = document.getElementById('menu-row');
+    row.innerHTML = '';
+    const items = kind === 'color'
+      ? COLORS.map(c => ({ bg: c }))
+      : SIZES.map(v => ({ size: Math.round(14 + v * 46) }));
+    items.forEach((it, i) => {
+      const d = document.createElement('div');
+      d.className = 'mi' + (it.size ? ' size' : '');
+      if (it.bg) d.style.background = it.bg;
+      if (it.size) {
+        const dot = document.createElement('i');
+        dot.className = 'dot on';
+        dot.style.opacity = 1; dot.style.outline = 'none';
+        dot.style.width = `calc(${it.size}px * var(--ui))`;
+        dot.style.height = `calc(${it.size}px * var(--ui))`;
+        d.appendChild(dot);
+      }
+      d.addEventListener('mouseenter', () => this.highlight(i));
+      d.addEventListener('click', e => { e.stopPropagation(); this.pick(i); });
+      row.appendChild(d);
+    });
+    const back = document.getElementById('menu');
+    back.classList.add('show');
+    back.onclick = () => this.closeMenu(false);
+    this.menu = { kind, index: kind === 'color' ? this.color : this.size };
+    this.highlight(this.menu.index);
+  }
+  highlight(i) {
+    if (!this.menu) return;
+    this.menu.index = i;
+    [...document.querySelectorAll('#menu-row .mi')]
+      .forEach((el, n) => el.classList.toggle('on', n === i));
+  }
+  // Nearest centre, not a hit test: forgiving of jitter, and there is always
+  // exactly one selection rather than dead space between targets.
+  aimMenu(x, y) {
+    const items = [...document.querySelectorAll('#menu-row .mi')];
+    let best = 0, bd = Infinity;
+    items.forEach((el, i) => {
+      const r = el.getBoundingClientRect();
+      const dx = x - (r.left + r.width / 2), dy = y - (r.top + r.height / 2);
+      const d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = i; }
+    });
+    this.highlight(best);
+  }
+  pick(i) { this.highlight(i); this.closeMenu(true); }
+  closeMenu(commit) {
+    if (commit && this.menu) {
+      if (this.menu.kind === 'color') this.setColor(this.menu.index);
+      else this.setSize(this.menu.index);
+    }
+    document.getElementById('menu').classList.remove('show');
+    this.menu = null; this.dwell = 0; this.dwellOn = null; this.fired = false;
+    this.arm(0, null);
+  }
+
+  /* ---- cursors ---- */
+  cursor(id, x, y) {
+    let el = this.cursors.get(id);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'cursor';
+      document.getElementById('cursors').appendChild(el);
+      this.cursors.set(id, el);
+    }
+    const d = Math.round(this.brush.radius() * 2 / RENDER_SCALE) + 8;
+    el.style.width = d + 'px'; el.style.height = d + 'px';
+    el.style.transform = `translate3d(${x - d / 2}px, ${y - d / 2}px, 0)`;
+  }
+  dropCursor(id) {
+    const el = this.cursors.get(id);
+    if (el) { el.remove(); this.cursors.delete(id); }
+  }
+
+  /* ---- painting ---- */
+  down(id, x, y) {
+    const p = this.toCanvas(x, y);
+    this.pointers.set(id, p);
+    this.brush.dot(p.x, p.y);
+  }
+  move(id, x, y) {
+    const p = this.toCanvas(x, y), prev = this.pointers.get(id);
+    if (!prev) return this.down(id, x, y);
+    this.brush.stroke(prev.x, prev.y, p.x, p.y);
+    this.pointers.set(id, p);
+  }
+  up(id) { this.pointers.delete(id); }
+
+  /* ---- input: cans ---- */
+  loop(t) {
+    requestAnimationFrame(this.loop);
+    const dt = this.lastT ? t - this.lastT : 0;
+    this.lastT = t;
+    if (this.calib) return this.calibStep();
+    if (!this.tracker.calibrated) return;
+
+    const list = this.tracker.screen(innerWidth, innerHeight);
+    const seen = new Set(list.map(b => b.id));
+    for (const id of [...this.pointers.keys()])
+      if (typeof id === 'number' && !seen.has(id)) { this.up(id); this.dropCursor(id); }
+    for (const id of [...this.cursors.keys()])
+      if (typeof id === 'number' && !seen.has(id)) this.dropCursor(id);
+
+    if (!list.length) {
+      if (this.menu) this.closeMenu(true);          // release = commit
+      if (this.dwell || this.fired) { this.dwell = 0; this.dwellOn = null; this.fired = false; this.arm(0, null); }
+      return;
+    }
+
+    let primary = null;
+    for (const b of list) {
+      this.cursor(b.id, b.x, b.y);
+      const over = this.targetAt(b.x, b.y);
+      if (this.menu || over) this.up(b.id);        // never spray the controls
+      else if (this.pointers.has(b.id)) this.move(b.id, b.x, b.y);
+      else this.down(b.id, b.x, b.y);
+      if (!primary) primary = { x: b.x, y: b.y, over };
+    }
+
+    if (this.menu) return this.aimMenu(primary.x, primary.y);
+
+    // Only the first can drives the menus: two people arming the same control
+    // has no meaning, and whoever is not driving should keep painting.
+    const over = primary.over;
+    if (!over) {
+      if (this.dwell || this.fired) { this.dwell = 0; this.dwellOn = null; this.fired = false; this.arm(0, null); }
+      return;
+    }
+    if (over.kind !== this.dwellOn) { this.dwellOn = over.kind; this.dwell = 0; this.fired = false; }
+    this.dwell += dt;
+    const need = over.kind === 'clear' ? DWELL_CLEAR : DWELL_MENU;
+    this.arm(this.dwell / need, over.el);
+    if (this.dwell >= need && !this.fired) {
+      this.fired = true;                            // leave and return to repeat
+      if (over.kind === 'clear') { this.clear(); this.arm(0, null); }
+      else this.openMenu(over.kind);
+    }
+  }
+
+  /* ---- input: mouse and touch, for setting up ---- */
+  wireMouse() {
+    const c = this.canvas;
+    const pos = e => ({ x: e.clientX, y: e.clientY });
+    c.addEventListener('pointerdown', e => {
+      if (this.menu) return;
+      c.setPointerCapture(e.pointerId);
+      const p = pos(e); this.down('m' + e.pointerId, p.x, p.y);
+    });
+    c.addEventListener('pointermove', e => {
+      const p = pos(e);
+      this.cursor('m' + e.pointerId, p.x, p.y);
+      if (this.pointers.has('m' + e.pointerId)) this.move('m' + e.pointerId, p.x, p.y);
+    });
+    const end = e => { this.up('m' + e.pointerId); this.dropCursor('m' + e.pointerId); };
+    c.addEventListener('pointerup', end);
+    c.addEventListener('pointercancel', end);
+    document.getElementById('colors').addEventListener('click', () => this.openMenu('color'));
+    document.getElementById('sizes').addEventListener('click', () => this.openMenu('size'));
+    document.getElementById('clear').addEventListener('click', () => this.clear());
+    addEventListener('keydown', e => {
+      if (e.key === 'c') this.beginCalibration();
+      else if (e.key === '+' || e.key === '=') this.setUiScale(this.uiScale + 0.1);
+      else if (e.key === '-') this.setUiScale(this.uiScale - 0.1);
+      else if (e.key === 'Backspace') this.clear();
+    });
+  }
+
+  /* ---- calibration ---- */
+  // The homography lives in the page, so a reload always needs this redone.
+  beginCalibration() {
+    const T = [[0.12, 0.12], [0.88, 0.12], [0.88, 0.88], [0.12, 0.88]];
+    const el = document.getElementById('cal');
+    el.querySelectorAll('.target').forEach(t => t.remove());
+    const rings = T.map(([fx, fy]) => {
+      const d = document.createElement('div');
+      d.className = 'target';
+      d.style.left = (fx * innerWidth) + 'px';
+      d.style.top = (fy * innerHeight) + 'px';
+      el.appendChild(d);
+      return d;
+    });
+    el.classList.add('show');
+    this.calib = { i: 0, T, rings, picked: [], streak: 0, off: 0, phase: 'wait' };
+    this.calibUI();
+  }
+  calibUI() {
+    const c = this.calib;
+    c.rings.forEach((r, i) => r.classList.toggle('on', i === c.i));
+    document.getElementById('cal-msg').textContent = `Corner ${c.i + 1} of 4`;
+    document.getElementById('cal-sub').textContent =
+      c.phase === 'release' ? 'Release the button…' : 'Point at the ring and hold the button';
+  }
+  calibStep() {
+    const c = this.calib;
+    if (!c) return;                 // finished, or never started
+    const NEED = 10, GAP = 5;
+    const spots = this.tracker.raw();
+    const b = spots.length ? spots[0] : null;
+    if (c.phase === 'release') {
+      if (!b) { if (++c.off >= GAP) { c.phase = 'wait'; c.off = 0; this.calibUI(); } }
+      else c.off = 0;
+      return;
+    }
+    if (!b) { c.streak = 0; c.acc = null; return; }
+    // Require the spot to sit still: averaging a wandering aim gives a corner
+    // that is confidently wrong, which is worse than one that refuses.
+    if (c.acc && Math.hypot(b.x - c.acc.x, b.y - c.acc.y) > 0.02) { c.streak = 0; }
+    c.acc = { x: b.x, y: b.y };
+    c.sum = c.streak === 0 ? { x: b.x, y: b.y } : { x: c.sum.x + b.x, y: c.sum.y + b.y };
+    c.streak++;
+    if (c.streak < NEED) return;
+
+    c.picked.push([c.sum.x / c.streak, c.sum.y / c.streak]);
+    c.streak = 0; c.acc = null; c.i++;
+    if (c.i < 4) { c.phase = 'release'; this.calibUI(); return; }
+
+    const H = solveHomography(c.picked, c.T);
+    document.getElementById('cal').classList.remove('show');
+    this.calib = null;
+    if (!H) { this.status('calibration failed — corners too close or in a line'); return; }
+    this.tracker.homography = H;
+    this.status('');
+  }
+}
+
+const wall = new Wall();
+window.wall = wall;          // tools/pi/kiosk.py drives the page through this
+wall.tracker.connect(`ws://${location.hostname || 'localhost'}:8765`);
+</script>
+</body>
+</html>
