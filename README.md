@@ -81,6 +81,35 @@ paints nothing is worse than one visibly asking to be calibrated.
 resolution is the wall's frame rate: measured ~10 fps at 1440p, ~15 at 1080p and
 34+ at 720p. The cost is pure fill rate.
 
+### Operating it at the exhibition
+
+The wall boots by itself and ends at the four corner targets. Everything else
+is reachable **with the can alone** — rest it on a control and hold; a ring
+fills, then the menu opens; move to highlight, release to pick.
+
+| control | where | what |
+|---|---|---|
+| sizes · mode · colours | bottom left | five brush sizes, four modes, four colours |
+| clear | top right | **hold ~1.8 s** — twice the menu dwell, because it wipes the wall |
+| the frog | bottom right | **Calibrate · Reload · Friedolin · Sound** |
+
+**Calibrate** is the one to know. The homography lives in the page, so any
+reload needs it redone — and if the camera is nudged, the paint will land in
+the wrong place until you recalibrate. It is in the frog menu precisely so
+nobody needs a keyboard to fix it.
+
+**Friedolin** places a large frog stencil: paint fills the silhouette and is
+cut off outside it. Same item toggles it off.
+
+**Sound** mutes the spray hiss and the choice persists. Worth knowing before
+opening rather than after.
+
+Modes are isolated by construction: Space builds its own animated layer on
+entry and tears it down on exit, so nothing pays for it while another mode is
+selected. Two cans paint at once, sharing a brush — the tracker matches spots
+between frames, and when they cross the identities swap, which is invisible
+while both use the same colour.
+
 ### Driving it with no mouse or keyboard
 
 The exhibition Pi has neither, so [`tools/pi/kiosk.py`](tools/pi/kiosk.py) drives

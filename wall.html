@@ -636,6 +636,7 @@ class Wall {
     };
 
     // Nothing runs when idle. The loop only exists while the tracker is live.
+    this.keepAwake();
     this.loop = this.loop.bind(this);
     requestAnimationFrame(this.loop);
   }
@@ -790,6 +791,23 @@ class Wall {
   }
 
   status(msg) { document.getElementById('status').textContent = msg || ''; }
+
+  /* Keep the screen awake. An exhibition wall stands idle between visitors,
+     and a blanked TV looks exactly like a crashed one. Re-acquired on
+     visibilitychange because the lock is dropped whenever the page is
+     backgrounded - including when the compositor blanks and restores. */
+  async keepAwake() {
+    try {
+      this._wake = await navigator.wakeLock.request('screen');
+      this._wake.addEventListener('release', () => { this._wake = null; });
+    } catch (e) { /* unsupported or refused; nothing else to do */ }
+    if (!this._wakeHooked) {
+      this._wakeHooked = true;
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && !this._wake) this.keepAwake();
+      });
+    }
+  }
 
   /* ---- controls ---- */
   buildControls() {

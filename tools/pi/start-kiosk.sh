@@ -9,8 +9,8 @@ cd "$(dirname "$0")/../.." || exit 1
 
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
-OUTPUT="${WALL_OUTPUT:-HDMI-A-1}"
-MODE="${WALL_MODE:-1280x720@60}"
+OUTPUT="${WALL_OUTPUT:-}"           # empty = pick the first connected output
+MODE="${WALL_MODE:-}"               # empty = try 720p, then 1080p
 URL="${WALL_URL:-http://localhost:8000/wall.html}"   # WALL_URL=…/test-wall.html for the old one
 WS="${WALL_WS:-ws://localhost:8765}"
 
@@ -23,11 +23,27 @@ for _ in $(seq 1 60); do
 done
 [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] || { say "no wayland socket, giving up"; exit 1; }
 
-# 2. 720p, measured: the wall renders ~10 fps at 1440p, ~15 at 1080p and 34+
-#    at 720p, because the cost is pure fill rate. wlr-randr does not persist,
-#    so it has to be set on every boot.
-wlr-randr --output "$OUTPUT" --mode "$MODE" >/dev/null 2>&1 \
-    || say "could not set $MODE on $OUTPUT (carrying on at whatever it is)"
+# 2. Resolution is the wall's frame rate: measured ~10 fps at 1440p, ~15 at
+#    1080p and 34+ at 720p, because the cost is pure fill rate. wlr-randr does
+#    not persist, so this runs every boot.
+#
+#    The output is DETECTED, not assumed. A different TV, or the other HDMI
+#    port, would otherwise leave the mode unset - and a 4K panel at its native
+#    mode is nine times the pixels of 720p, which would look like the software
+#    had broken rather than the display having changed.
+if [ -z "$OUTPUT" ]; then
+    OUTPUT=$(wlr-randr 2>/dev/null | awk '/^[A-Za-z]/{n=$1} /Enabled: yes/{print n; exit}')
+fi
+[ -n "$OUTPUT" ] || OUTPUT=HDMI-A-1
+say "display output: $OUTPUT"
+
+set_mode() { wlr-randr --output "$OUTPUT" --mode "$1" >/dev/null 2>&1; }
+if [ -n "$MODE" ]; then
+    set_mode "$MODE" || say "could not set $MODE on $OUTPUT"
+elif set_mode 1280x720@60; then say "mode 1280x720@60"
+elif set_mode 1920x1080@60; then say "mode 1920x1080@60 (720p refused)"
+else say "WARNING: could not set a mode on $OUTPUT - running at its native one"
+fi
 
 # 3. Wait for the tracker's HTTP server - it serves the page we are about to open.
 for _ in $(seq 1 60); do
