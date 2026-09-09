@@ -53,6 +53,7 @@ arm() {
 Description=Restore wifi after the no-network test
 [Service]
 Type=oneshot
+ExecStartPre=-/usr/bin/sudo -n /usr/sbin/rfkill unblock wifi
 ExecStart=/usr/bin/sudo -n $NM radio wifi on
 ExecStartPost=/usr/bin/systemctl --user disable wall-wifi-restore.timer
 EOF
@@ -89,17 +90,32 @@ start)
         || { say "timer did not enable - NOT touching the radio"; exit 1; }
     say "restore timer armed and enabled"
 
-    say "radio off, then rebooting into a networkless boot"
+    # nmcli alone is NOT enough: measured on this Pi, wlan0 was activated 14
+    # seconds into the next boot, so the "networkless" boot had a network. The
+    # NetworkManager radio preference did not survive, and systemd-rfkill
+    # restored the unblocked state. rfkill is the thing systemd persists on
+    # purpose, so use it when present and refuse the test when it is not,
+    # rather than run a test that quietly proves nothing.
+    if ! command -v rfkill >/dev/null 2>&1; then
+        say "rfkill is not installed, and nmcli alone does not survive a reboot"
+        say "install it first:  sudo apt install -y rfkill"
+        say "then add it to the sudoers line as: /usr/sbin/rfkill"
+        exit 1
+    fi
+    say "radio off (rfkill), then rebooting into a networkless boot"
     say "you will lose ssh; it comes back ~${mins} min after the Pi boots"
-    sudo -n $NM radio wifi off || { say "could not disable wifi"; exit 1; }
-    sleep 1
+    sudo -n rfkill block wifi || { say "could not block the radio"; exit 1; }
+    sudo -n $NM radio wifi off >/dev/null 2>&1
+    sleep 3                                  # let the state be written out
+    say "radio now: $(nmcli radio wifi 2>/dev/null)"
     sudo -n /sbin/reboot
     ;;
 
 stop)
     systemctl --user disable --now wall-wifi-restore.timer >/dev/null 2>&1
+    command -v rfkill >/dev/null 2>&1 && sudo -n rfkill unblock wifi 2>/dev/null
     if perms_ok; then sudo -n $NM radio wifi on && say "radio on, timer disarmed"
-    else say "run: sudo nmcli radio wifi on"; fi
+    else say "run: sudo rfkill unblock wifi && sudo nmcli radio wifi on"; fi
     ;;
 
 *) sed -n '2,20p' "$0" ;;
