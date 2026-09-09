@@ -300,7 +300,11 @@ const THEMES = {
     mirror: true,               // the original mirrored ink about the centre
     colors: ['#141210', '#4a2f1c', '#232c4d', '#5c1a1a'],
     radius: s => 17 * s,
-    drip: { chance: 0.05, len: [25, 120], w: 0.30, alpha: 0.85, speed: 1.6, blend: 'multiply' },
+    // No multiply here, though the stroke is inky: a drip GROWS by overlapping
+    // stamps, and multiply compounds - about 19 passes per pixel at this step
+    // and width, which drives any colour to black. Measured: indigo #232c4d
+    // rendered as rgb(2,3,9). source-over keeps the colour and still reads wet.
+    drip: { chance: 0.05, len: [25, 120], w: 0.30, alpha: 0.9, speed: 1.6 },
     paint(ctx, x0, y0, x1, y1, r, color) {
       // Ink is dense in the middle and stops hard, unlike spray. The stamp
       // holds full opacity most of the way out, then falls off quickly.
