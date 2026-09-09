@@ -21,7 +21,9 @@ Honest summary of where it stands:
 | Wall app, calibration, painting | ✅ |
 | Controls usable with the can | ✅ colour, mode, size |
 | Boots into the wall by itself | ✅ user services, always ends at calibration |
-| Latency | ⚠️ ~150–250 ms, dominated by the C910's USB/MJPEG pipeline |
+| Rendering | ✅ **58.4 fps while painting** on a Pi 5 at 720p — the rewrite, against 24 for the original |
+| Cooling | ✅ Active Cooler fitted: 53 °C, `throttled=0x0`, full 2.4 GHz (was 82 °C and throttling) |
+| Latency | ⚠️ dominated by the C910's USB/MJPEG pipeline, ~60–130 ms, which only the CSI camera removes |
 | Mono camera + bandpass filter | ⏳ in transit, untested |
 | Usable cone angle | ⏳ never measured — `tools/pi/measure.py` is ready |
 | Multiple simultaneous users | ❌ unsolved, unscoped |
@@ -80,6 +82,27 @@ paints nothing is worse than one visibly asking to be calibrated.
 720p is set on every boot because `wlr-randr` does not persist, and because the
 resolution is the wall's frame rate: measured ~10 fps at 1440p, ~15 at 1080p and
 34+ at 720p. The cost is pure fill rate.
+
+### Why there are two walls
+
+[`wall.html`](wall.html) is the one that boots. [`test-wall.html`](test-wall.html)
+is the original and stays as a fallback — `WALL_URL` in `start-kiosk.sh` switches
+between them.
+
+The rewrite exists because the original's losses were structural, not tuning.
+Measured on the Pi at 720p, while painting:
+
+| | original | rewrite |
+|---|---|---|
+| painting | 24 fps | **58.4 fps** |
+| idle | 60 fps | 60 fps |
+
+Three canvases composited every frame became one that is never cleared; a
+full-screen overlay cleared per frame to draw a cursor became a DOM element
+moved by a transform; per-stamp gradients became cached bitmaps; and the
+backing store is capped at 1×. Nothing animates on its own, so an idle wall
+costs nothing and each theme's effects are paid for only while that theme is
+selected.
 
 ### Operating it at the exhibition
 
