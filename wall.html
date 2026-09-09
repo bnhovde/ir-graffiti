@@ -244,6 +244,7 @@ const THEMES = {
     bg: '#f4f4f2',
     colors: ['#ff6b35', '#f7d038', '#e84a8a', '#1e88e5'],
     radius: s => 26 * s,
+    drip: { chance: 0.035, len: [30, 130], w: 0.22, alpha: 0.30, speed: 2.2 },
     paint(ctx, x0, y0, x1, y1, r, color) {
       const img = makeStamp('simple' + color, (g, R) => {
         const grad = g.createRadialGradient(R, R, 0, R, R, R);
@@ -269,6 +270,7 @@ const THEMES = {
     bg: '#f2ede1',
     colors: ['#141210', '#4a2f1c', '#232c4d', '#5c1a1a'],
     radius: s => 17 * s,
+    drip: { chance: 0.05, len: [25, 120], w: 0.30, alpha: 0.85, speed: 1.6, blend: 'multiply' },
     paint(ctx, x0, y0, x1, y1, r, color) {
       // Ink is dense in the middle and stops hard, unlike spray. The stamp
       // holds full opacity most of the way out, then falls off quickly.
@@ -302,6 +304,7 @@ const THEMES = {
     bg: '#ffffff',
     colors: ['#FF6B3D', '#F2E64B', '#E068B4', '#0077D4'],
     radius: s => 17 * s,
+    drip: { chance: 0.03, len: [40, 160], w: 0.24, alpha: 0.55, speed: 2.6 },
     paint(ctx, x0, y0, x1, y1, r, color) {
       // A faint haze plus hard speckles. The speckles are what make it read as
       // aerosol rather than airbrush, and small filled arcs are cheap - it is
@@ -336,6 +339,7 @@ const THEMES = {
     dark: true,
     colors: ['#7fd8ff', '#ffb066', '#ff7ad9', '#c9f56b'],
     radius: s => 20 * s,
+    drip: null,                 // paint does not run in zero gravity
     // The old Space theme animated a sky every frame, for every user, whether
     // or not it was the active theme. The stars are painted ONCE here instead:
     // the same look, and nothing to redraw.
@@ -487,6 +491,7 @@ class Wall {
     if (!THEMES[this.themeId]) this.themeId = 'simple';
     this.theme = THEMES[this.themeId];
     this.dwell = 0; this.dwellOn = null; this.fired = false;
+    this.drips = [];
     this.menu = null;
     this.lastT = 0;
 
@@ -497,10 +502,23 @@ class Wall {
     this.wireMouse();
     this.setUiScale(+(localStorage.getItem('uiScale') || 1) || 1);
 
-    this.tracker.onstate = s => this.status(
-      s === 'live' ? (this.tracker.calibrated ? '' : 'connected — calibrating…')
-      : s === 'connecting' ? 'connecting…'
-      : s === 'error' ? 'tracker lost — retrying…' : '');
+    // Report what is true, not what is hoped: an earlier version said
+    // "calibrating…" whenever it was merely uncalibrated, so a wall that had
+    // never started calibrating claimed it was busy doing so.
+    this.tracker.onstate = s => {
+      if (s === 'live') {
+        this.status(this.tracker.calibrated ? '' : 'connected — starting calibration…');
+        // The homography lives in the page, so every reload needs it redone.
+        // Start it here rather than relying on an external tool to remember.
+        if (!this.tracker.calibrated && !this.calib) setTimeout(() => {
+          if (this.tracker.state === 'live' && !this.tracker.calibrated && !this.calib)
+            this.beginCalibration();
+        }, 600);
+      } else {
+        this.status(s === 'connecting' ? 'connecting…'
+                  : s === 'error' ? 'tracker lost — retrying…' : '');
+      }
+    };
 
     // Nothing runs when idle. The loop only exists while the tracker is live.
     this.loop = this.loop.bind(this);
@@ -529,6 +547,7 @@ class Wall {
   }
   clear() {
     this.ctx.fillStyle = this.theme.bg;
+    this.drips.length = 0;
     this.ctx.fillRect(0, 0, this.vw, this.vh);
     if (this.theme.enter) this.theme.enter(this.ctx, this.vw, this.vh);
   }
@@ -703,6 +722,52 @@ class Wall {
     if (!prev) return this.down(id, x, y);
     this.theme.paint(this.ctx, prev.x, prev.y, p.x, p.y, this.radius(), this.theme.colors[this.color]);
     this.pointers.set(id, p);
+    this.maybeDrip(p.x, p.y);
+  }
+
+  // A drip GROWS - it never moves - so it can be drawn straight into the
+  // persistent canvas a few pixels at a time and never needs erasing. That is
+  // what makes it affordable here: the old version redrew every live drip onto
+  // a cleared overlay every frame.
+  maybeDrip(x, y) {
+    const d = this.theme.drip;
+    if (!d || this.drips.length >= 40 || Math.random() > d.chance) return;
+    const r = this.radius();
+    this.drips.push({
+      x, y, len: 0,
+      target: d.len[0] + Math.random() * (d.len[1] - d.len[0]),
+      w: r * d.w * (0.7 + Math.random() * 0.6),
+      speed: d.speed * (0.7 + Math.random() * 0.7),
+      color: this.theme.colors[this.color],
+      alpha: d.alpha, blend: d.blend || 'source-over',
+    });
+  }
+  growDrips() {
+    const ctx = this.ctx;
+    for (let i = this.drips.length - 1; i >= 0; i--) {
+      const d = this.drips[i];
+      // Its own stamp rather than borrowing a theme's: the cache keys differ
+      // per theme (spray's is 'haze'), and a wrong key silently builds an
+      // EMPTY canvas and caches it, so the drips would simply never appear.
+      const img = makeStamp('drip' + d.color, (g, R) => {
+        const grad = g.createRadialGradient(R, R, 0, R, R, R);
+        grad.addColorStop(0, d.color); grad.addColorStop(0.6, d.color);
+        grad.addColorStop(1, hex(d.color, 0));
+        g.fillStyle = grad; g.beginPath(); g.arc(R, R, R, 0, 6.2832); g.fill();
+      });
+      const step = d.speed;
+      ctx.globalCompositeOperation = d.blend;
+      // Taper as it runs out of paint, which is what stops it looking like a
+      // drawn line and starts it looking like gravity.
+      const t = d.len / d.target;
+      const w = d.w * (1 - t * 0.55);
+      ctx.globalAlpha = d.alpha * (1 - t * 0.5);
+      ctx.drawImage(img, d.x - w, d.y + d.len - w, w * 2, w * 2);
+      d.len += step;
+      if (d.len >= d.target) this.drips.splice(i, 1);
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
   }
   up(id) { this.pointers.delete(id); }
 
@@ -711,6 +776,9 @@ class Wall {
     requestAnimationFrame(this.loop);
     const dt = this.lastT ? t - this.lastT : 0;
     this.lastT = t;
+    // One length check per frame when there are none: an empty effect costs
+    // nothing, which is the rule the whole build is held to.
+    if (this.drips.length) this.growDrips();
     if (this.calib) return this.calibStep();
     if (!this.tracker.calibrated) return;
 
@@ -801,39 +869,57 @@ class Wall {
       return d;
     });
     el.classList.add('show');
-    this.calib = { i: 0, T, rings, picked: [], streak: 0, off: 0, phase: 'wait' };
+    // Starts in 'release': if the button is already held when this opens,
+    // corner 1 would otherwise capture wherever the can happened to be aimed.
+    this.calib = { i: 0, T, rings, picked: [], streak: [], off: 0, phase: 'release' };
     this.calibUI();
   }
-  calibUI() {
+  calibUI(sub) {
     const c = this.calib;
     c.rings.forEach((r, i) => r.classList.toggle('on', i === c.i));
     document.getElementById('cal-msg').textContent = `Corner ${c.i + 1} of 4`;
-    document.getElementById('cal-sub').textContent =
-      c.phase === 'release' ? 'Release the button…' : 'Point at the ring and hold the button';
+    document.getElementById('cal-sub').textContent = sub !== undefined ? sub
+      : c.phase === 'release' ? 'Release the button…'
+      : 'Point at the ring and hold the button';
   }
   calibStep() {
     const c = this.calib;
     if (!c) return;                 // finished, or never started
-    const NEED = 10, GAP = 5;
+    const NEED = 12;                // consecutive good frames per corner
+    const GAP = 6;                  // frames with the LED off before one counts
+    const SPREAD = 0.0075;          // normalised: how still the aim must be
+
     const spots = this.tracker.raw();
     const b = spots.length ? spots[0] : null;
+
     if (c.phase === 'release') {
-      if (!b) { if (++c.off >= GAP) { c.phase = 'wait'; c.off = 0; this.calibUI(); } }
-      else c.off = 0;
+      if (b) { c.off = 0; return; }
+      if (++c.off >= GAP) { c.phase = 'aim'; c.streak = []; c.off = 0; this.calibUI(); }
       return;
     }
-    if (!b) { c.streak = 0; c.acc = null; return; }
-    // Require the spot to sit still: averaging a wandering aim gives a corner
-    // that is confidently wrong, which is worse than one that refuses.
-    if (c.acc && Math.hypot(b.x - c.acc.x, b.y - c.acc.y) > 0.02) { c.streak = 0; }
-    c.acc = { x: b.x, y: b.y };
-    c.sum = c.streak === 0 ? { x: b.x, y: b.y } : { x: c.sum.x + b.x, y: c.sum.y + b.y };
-    c.streak++;
-    if (c.streak < NEED) return;
 
-    c.picked.push([c.sum.x / c.streak, c.sum.y / c.streak]);
-    c.streak = 0; c.acc = null; c.i++;
-    if (c.i < 4) { c.phase = 'release'; this.calibUI(); return; }
+    if (!b) {
+      if (c.streak.length) this.calibUI('Lost it — hold the button and keep still');
+      c.streak = [];
+      return;
+    }
+    // Compare against the mean of the streak so far, not the previous sample:
+    // sample-to-sample drift is small even when the aim is sweeping, so the
+    // looser test would average a moving aim into a confidently wrong corner.
+    if (c.streak.length >= 3) {
+      const mx = c.streak.reduce((a, p) => a + p[0], 0) / c.streak.length;
+      const my = c.streak.reduce((a, p) => a + p[1], 0) / c.streak.length;
+      if (Math.hypot(b.x - mx, b.y - my) > SPREAD) c.streak = [];
+    }
+    c.streak.push([b.x, b.y]);
+    this.calibUI(`Hold… ${Math.min(NEED, c.streak.length)}/${NEED}`);
+    if (c.streak.length < NEED) return;
+
+    const n = c.streak.length;
+    c.picked.push([c.streak.reduce((a, p) => a + p[0], 0) / n,
+                   c.streak.reduce((a, p) => a + p[1], 0) / n]);
+    c.streak = []; c.i++;
+    if (c.i < 4) { c.phase = 'release'; c.off = 0; this.calibUI(); return; }
 
     const H = solveHomography(c.picked, c.T);
     document.getElementById('cal').classList.remove('show');
@@ -845,7 +931,16 @@ class Wall {
 }
 
 const wall = new Wall();
-window.wall = wall;          // tools/pi/kiosk.py drives the page through this
+window.wall = wall;
+
+// tools/pi/kiosk.py and start-kiosk.sh drive the page through `app`, with the
+// names the old wall used. Aliasing costs nothing and means one set of tools
+// works against both pages rather than two that drift apart.
+window.app = wall;
+wall.piTracker = wall.tracker;
+wall.setCamMode = () => {};                       // one mode here; harmless
+wall.beginIRCalibration = () => wall.beginCalibration();
+wall.clearCanvas = () => wall.clear();
 wall.tracker.connect(`ws://${location.hostname || 'localhost'}:8765`);
 </script>
 </body>
