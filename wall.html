@@ -46,7 +46,20 @@
     font-family:'Space Grotesk',system-ui,-apple-system,sans-serif;color:var(--fg);
     -webkit-user-select:none;user-select:none;touch-action:none;}
 
-  #paint{position:fixed;inset:0;display:block;}
+  #paint{position:fixed;inset:0;display:block;z-index:1;}
+
+  /* Space's own layer. It exists only while Space is selected, and it moves
+     with CSS transforms and opacity - compositor work, no per-frame
+     JavaScript and no canvas re-upload. That is what makes a drifting sky
+     affordable here when redrawing it every frame was not. */
+  #sky{position:fixed;inset:0;z-index:0;overflow:hidden;background:#07070f;}
+  #sky canvas{position:absolute;inset:0;width:100%;height:100%;}
+  #sky .neb{position:absolute;border-radius:50%;filter:blur(40px);will-change:transform;}
+  #sky .stars-b{animation:twinkle 5.5s ease-in-out infinite;}
+  @keyframes driftA{from{transform:translate3d(-7vw,-4vh,0)}to{transform:translate3d(7vw,4vh,0)}}
+  @keyframes driftB{from{transform:translate3d(6vw,5vh,0)}to{transform:translate3d(-6vw,-5vh,0)}}
+  @keyframes driftC{from{transform:translate3d(-4vw,5vh,0)}to{transform:translate3d(5vw,-4vh,0)}}
+  @keyframes twinkle{0%,100%{opacity:.30}50%{opacity:.95}}
 
   /* Cursors: DOM, not canvas. Moving a transform is compositor-only work. */
   .cursor{
@@ -138,9 +151,13 @@
   .brand{position:fixed;left:calc(26px * var(--ui));top:calc(20px * var(--ui));z-index:7;
     pointer-events:none;filter:var(--brand-filter);}
   .brand svg{display:block;height:calc(19px * var(--ui));width:auto;}
-  .brand.invent{top:auto;left:auto;bottom:calc(24px * var(--ui));right:calc(26px * var(--ui));
-    pointer-events:auto;cursor:pointer;border-radius:calc(20px * var(--ui));
-    padding:calc(6px * var(--ui));}
+  /* Same footprint as a pill: it is a control now, and the can has to be able
+     to land on it as reliably as on the others. */
+  .brand.invent{top:auto;left:auto;bottom:calc(22px * var(--ui));right:calc(26px * var(--ui));
+    pointer-events:auto;cursor:pointer;display:flex;align-items:center;justify-content:center;
+    width:calc(66px * var(--ui));height:calc(66px * var(--ui));border-radius:calc(34px * var(--ui));
+    padding:0;}
+  .brand.invent svg{height:calc(40px * var(--ui));}
   .brand.invent::after{
     content:'';position:absolute;inset:calc(-6px * var(--ui));border-radius:inherit;
     pointer-events:none;opacity:0;
@@ -149,7 +166,6 @@
     mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 0);
   }
   .brand.invent.arming::after{opacity:1;}
-  .brand.invent svg{height:calc(18.7px * var(--ui));}
   #status{position:fixed;left:calc(26px * var(--ui));top:calc(52px * var(--ui));z-index:6;
     font-size:calc(13px * var(--ui));opacity:.55;}
 </style>
@@ -351,44 +367,87 @@ const THEMES = {
     label: 'Space',
     bg: '#07070f',
     dark: true,
+    transparent: true,          // the sky layer below shows through
     colors: ['#7fd8ff', '#ffb066', '#ff7ad9', '#c9f56b'],
     radius: s => 20 * s,
     drip: null,                 // paint does not run in zero gravity
-    // The old Space theme animated a sky every frame, for every user, whether
-    // or not it was the active theme. The stars are painted ONCE here instead:
-    // the same look, and nothing to redraw.
-    enter(ctx, w, h) {
-      for (let i = 0; i < Math.round(w * h / 5200); i++) {
-        const x = Math.random() * w, y = Math.random() * h;
-        const r = Math.random() < 0.92 ? Math.random() * 1.1 + 0.3 : Math.random() * 2 + 1.2;
-        ctx.fillStyle = `rgba(255,255,255,${0.25 + Math.random() * 0.6})`;
-        ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fill();
-      }
-      for (let i = 0; i < 3; i++) {                    // faint nebulae
-        const x = Math.random() * w, y = Math.random() * h, R = Math.min(w, h) * (0.25 + Math.random() * 0.3);
-        const c = ['#3a2a6a', '#22405f', '#4a2350'][i % 3];
-        const g = ctx.createRadialGradient(x, y, 0, x, y, R);
-        g.addColorStop(0, hex(c, 0.5)); g.addColorStop(1, hex(c, 0));
-        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, R, 0, 6.2832); ctx.fill();
-      }
+
+    // Built as DOM, torn down on exit. No other theme pays for any of it.
+    enterLayer(wall) {
+      const sky = document.createElement('div');
+      sky.id = 'sky';
+      const w = innerWidth, h = innerHeight;
+      const stars = (n, max, cls, alpha) => {
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h; c.className = cls;
+        const g = c.getContext('2d');
+        for (let i = 0; i < n; i++) {
+          const r = Math.random() * max + 0.3;
+          g.fillStyle = `rgba(255,255,255,${alpha * (0.4 + Math.random() * 0.6)})`;
+          g.beginPath(); g.arc(Math.random() * w, Math.random() * h, r, 0, 6.2832); g.fill();
+        }
+        return c;
+      };
+      sky.appendChild(stars(Math.round(w * h / 3600), 1.1, 'stars-a', 0.85));
+      sky.appendChild(stars(Math.round(w * h / 26000), 2.1, 'stars-b', 1));
+      [['#3a2a6a', 'driftA', 46], ['#22405f', 'driftB', 61], ['#4a2350', 'driftC', 78]]
+        .forEach(([col, anim, secs], i) => {
+          const n = document.createElement('div');
+          n.className = 'neb';
+          const R = Math.min(w, h) * (0.55 + i * 0.18);
+          n.style.width = n.style.height = R + 'px';
+          n.style.left = (Math.random() * (w - R * 0.4) - R * 0.3) + 'px';
+          n.style.top = (Math.random() * (h - R * 0.4) - R * 0.3) + 'px';
+          n.style.background = `radial-gradient(circle, ${col} 0%, rgba(0,0,0,0) 70%)`;
+          n.style.opacity = 0.55;
+          n.style.animation = `${anim} ${secs}s ease-in-out infinite alternate`;
+          sky.appendChild(n);
+        });
+      document.body.insertBefore(sky, document.getElementById('paint'));
     },
+    exitLayer() { const el = document.getElementById('sky'); if (el) el.remove(); },
+
     paint(ctx, x0, y0, x1, y1, r, color) {
-      const img = makeStamp('glow' + color, (g, R) => {
+      const glow = makeStamp('glow' + color, (g, R) => {
         const grad = g.createRadialGradient(R, R, 0, R, R, R);
         grad.addColorStop(0, '#ffffff'); grad.addColorStop(0.25, color);
         grad.addColorStop(1, hex(color, 0));
         g.fillStyle = grad; g.beginPath(); g.arc(R, R, R, 0, 6.2832); g.fill();
       });
-      ctx.globalCompositeOperation = 'lighter';        // light adds, in space
-      ctx.globalAlpha = 0.22;
+      // A lit body, not a blob: bright limb one side, terminator the other.
+      const body = makeStamp('planet' + color, (g, R) => {
+        const grad = g.createRadialGradient(R * 0.62, R * 0.55, R * 0.06, R, R, R);
+        grad.addColorStop(0, '#ffffff'); grad.addColorStop(0.22, color);
+        grad.addColorStop(0.85, hex(color, 0.35)); grad.addColorStop(1, hex(color, 0));
+        g.fillStyle = grad; g.beginPath(); g.arc(R, R, R, 0, 6.2832); g.fill();
+      });
+      ctx.globalCompositeOperation = 'lighter';       // light adds, in space
+      ctx.globalAlpha = 0.20;
       along(x0, y0, x1, y1, Math.max(2, r * 0.3), (x, y) => {
-        ctx.drawImage(img, x - r, y - r, r * 2, r * 2);
-        if (Math.random() < 0.3) {
-          const a = Math.random() * 6.2832, d = r * (1 + Math.random() * 1.6);
-          const fr = r * (0.1 + Math.random() * 0.22);
-          ctx.drawImage(img, x + Math.cos(a) * d - fr, y + Math.sin(a) * d - fr, fr * 2, fr * 2);
+        ctx.drawImage(glow, x - r, y - r, r * 2, r * 2);
+        if (Math.random() < 0.28) {                   // dust
+          const a = Math.random() * 6.2832, d = r * (1 + Math.random() * 1.8);
+          const fr = r * (0.08 + Math.random() * 0.2);
+          ctx.drawImage(glow, x + Math.cos(a) * d - fr, y + Math.sin(a) * d - fr, fr * 2, fr * 2);
         }
       });
+      // Occasional worlds strung along the stroke, baked once like everything else.
+      if (Math.random() < 0.10) {
+        const pr = r * (0.55 + Math.random() * 1.5);
+        const a = Math.random() * 6.2832, d = r * (0.4 + Math.random() * 1.4);
+        const px = x1 + Math.cos(a) * d, py = y1 + Math.sin(a) * d;
+        ctx.globalAlpha = 0.95;
+        ctx.drawImage(body, px - pr, py - pr, pr * 2, pr * 2);
+        if (Math.random() < 0.35) {                   // a ring, now and then
+          ctx.save();
+          ctx.translate(px, py); ctx.rotate((Math.random() - 0.5) * 1.2);
+          ctx.scale(1, 0.3);
+          ctx.strokeStyle = hex(color, 0.55);
+          ctx.lineWidth = Math.max(1, pr * 0.10);
+          ctx.beginPath(); ctx.arc(0, 0, pr * 1.55, 0, 6.2832); ctx.stroke();
+          ctx.restore();
+        }
+      }
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
     },
@@ -530,7 +589,10 @@ function frogPath() {
 class Wall {
   constructor() {
     this.canvas = document.getElementById('paint');
-    this.ctx = this.canvas.getContext('2d', { alpha: false });
+    // alpha:true so a theme can put a live layer underneath. Opaque would be
+    // marginally cheaper to blend, but the cost that mattered was texture
+    // upload, not blending, and this buys Space its drifting sky.
+    this.ctx = this.canvas.getContext('2d', { alpha: true });
     this.tracker = new Tracker();
     this.pointers = new Map();     // id -> {x, y}
     this.cursors = new Map();      // id -> element
@@ -593,15 +655,17 @@ class Wall {
     this.canvas.width = w; this.canvas.height = h;
     this.canvas.style.width = innerWidth + 'px';
     this.canvas.style.height = innerHeight + 'px';
-    this.ctx.fillStyle = (this.theme && this.theme.bg) || '#f4f4f2';
-    this.ctx.fillRect(0, 0, w, h);
+    if (this.theme && this.theme.transparent) this.ctx.clearRect(0, 0, w, h);
+    else { this.ctx.fillStyle = (this.theme && this.theme.bg) || '#f4f4f2';
+           this.ctx.fillRect(0, 0, w, h); }
     if (keep) this.ctx.drawImage(keep, 0, 0, w, h);
     this.vw = w; this.vh = h;
   }
   clear() {
-    this.ctx.fillStyle = this.theme.bg;
     this.drips.length = 0;
-    this.ctx.fillRect(0, 0, this.vw, this.vh);
+    if (this.theme.transparent) this.ctx.clearRect(0, 0, this.vw, this.vh);
+    else { this.ctx.fillStyle = this.theme.bg;
+           this.ctx.fillRect(0, 0, this.vw, this.vh); }
     if (this.theme.enter) this.theme.enter(this.ctx, this.vw, this.vh);
     this.drawStencilGuide();
   }
@@ -617,7 +681,11 @@ class Wall {
   // Switching wipes the wall, as it did before: the background changes, and a
   // stroke made in one palette has no meaning in another.
   applyTheme(initial) {
+    // Tear the old theme's layer down first: an inactive theme must leave
+    // nothing behind, or "isolated" stops being true after one switch.
+    if (this.theme && this.theme.exitLayer) this.theme.exitLayer(this);
     this.theme = THEMES[this.themeId];
+    if (this.theme.enterLayer) this.theme.enterLayer(this);
     const R = document.documentElement.style;
     R.setProperty('--bg', this.theme.bg);
     R.setProperty('--fg', this.theme.dark ? '#f2f2f2' : '#161616');

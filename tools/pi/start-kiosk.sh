@@ -11,7 +11,7 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 OUTPUT="${WALL_OUTPUT:-HDMI-A-1}"
 MODE="${WALL_MODE:-1280x720@60}"
-URL="${WALL_URL:-http://localhost:8000/test-wall.html}"
+URL="${WALL_URL:-http://localhost:8000/wall.html}"   # WALL_URL=…/test-wall.html for the old one
 WS="${WALL_WS:-ws://localhost:8765}"
 
 say() { echo "[start-kiosk] $(date +%H:%M:%S) $*"; }
