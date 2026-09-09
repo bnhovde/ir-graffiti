@@ -21,7 +21,13 @@ UNIT="$HOME/.config/systemd/user"
 NM=/usr/bin/nmcli
 say() { echo "[wifi-test] $*"; }
 
-perms_ok() { sudo -n $NM radio wifi >/dev/null 2>&1; }
+# Ask sudo what is PERMITTED rather than running something to find out: the
+# rule grants "nmcli radio wifi on|off", and testing with a bare "nmcli radio
+# wifi" fails even when the rule is correctly installed.
+perms_ok() {
+    sudo -n -l "$NM" radio wifi on >/dev/null 2>&1 \
+        && sudo -n -l /sbin/reboot >/dev/null 2>&1
+}
 
 usage_perms() {
     cat <<EOF
